@@ -1,0 +1,90 @@
+[info]|2026-05-17 22:02:53.388|t:24552|worker.cpp:41|Start
+[info]|2026-05-17 22:02:53.388|t:25956|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:02:53.390|t:25956|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:02:53.391|t:25956|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:02:53.391|t:25956|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:02:53.391|t:25956|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:02:53.398|t:24552|main.lua:1|load script ...
+[info]|2026-05-17 22:02:53.398|t:24552|main.lua:6|19
+[info]|2026-05-17 22:02:53.398|t:24552|main.lua:7|aaa
+[info]|2026-05-17 22:02:53.398|t:24552|main.lua:8|100
+[info]|2026-05-17 22:18:53.016|t:28892|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:18:53.016|t:19316|worker.cpp:41|Start
+[info]|2026-05-17 22:18:53.018|t:28892|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:18:53.019|t:28892|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:19:01.776|t:28892|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:19:01.776|t:28892|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:19:08.836|t:19316|main.lua:1|load script ...
+[info]|2026-05-17 22:19:08.836|t:19316|main.lua:6|19
+[info]|2026-05-17 22:19:08.836|t:19316|main.lua:7|aaa
+[info]|2026-05-17 22:19:08.836|t:19316|main.lua:8|100
+[info]|2026-05-17 22:38:57.884|t:12436|worker.cpp:41|Start
+[info]|2026-05-17 22:38:57.884|t:22700|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:38:57.885|t:22700|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:38:57.886|t:22700|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:38:57.886|t:22700|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:38:57.886|t:22700|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:38:57.892|t:12436|main.lua:1|load script ...
+[info]|2026-05-17 22:38:57.892|t:12436|main.lua:6|19
+[info]|2026-05-17 22:38:57.892|t:12436|main.lua:7|aaa
+[info]|2026-05-17 22:38:57.892|t:12436|main.lua:8|100
+[info]|2026-05-17 22:39:09.206|t:20036|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:39:09.206|t:29804|worker.cpp:41|Start
+[info]|2026-05-17 22:39:09.208|t:20036|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:39:09.208|t:20036|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:39:09.209|t:20036|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:39:09.209|t:20036|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:39:26.169|t:29804|main.lua:1|load script ...
+[info]|2026-05-17 22:39:26.169|t:29804|main.lua:6|19
+[info]|2026-05-17 22:39:26.169|t:29804|main.lua:7|aaa
+[info]|2026-05-17 22:39:26.169|t:29804|main.lua:8|100
+[info]|2026-05-17 22:40:31.685|t:5888|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:40:31.686|t:27288|worker.cpp:41|Start
+[info]|2026-05-17 22:40:31.687|t:5888|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:40:31.687|t:5888|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:40:31.687|t:5888|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:40:31.687|t:5888|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:40:34.502|t:27288|main.lua:1|load script ...
+[info]|2026-05-17 22:40:34.502|t:27288|main.lua:6|19
+[info]|2026-05-17 22:40:34.502|t:27288|main.lua:7|aaa
+[info]|2026-05-17 22:40:34.502|t:27288|main.lua:8|100
+[info]|2026-05-17 22:41:50.702|t:12760|worker.cpp:41|Start
+[info]|2026-05-17 22:41:50.702|t:10396|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:41:50.704|t:10396|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:41:50.705|t:10396|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:41:53.209|t:10396|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:41:53.209|t:10396|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:41:53.218|t:12760|main.lua:1|load script ...
+[info]|2026-05-17 22:41:53.218|t:12760|main.lua:6|19
+[info]|2026-05-17 22:41:53.218|t:12760|main.lua:7|aaa
+[info]|2026-05-17 22:41:53.218|t:12760|main.lua:8|100
+[info]|2026-05-17 22:44:21.098|t:12840|worker.cpp:41|Start
+[info]|2026-05-17 22:44:21.098|t:8024|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:44:21.100|t:8024|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:44:21.100|t:8024|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:44:21.100|t:8024|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:44:21.100|t:8024|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:44:23.849|t:12840|main.lua:1|load script ...
+[info]|2026-05-17 22:44:23.849|t:12840|main.lua:6|19
+[info]|2026-05-17 22:44:23.849|t:12840|main.lua:7|aaa
+[info]|2026-05-17 22:44:23.849|t:12840|main.lua:8|100
+[info]|2026-05-17 22:48:38.535|t:7208|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:48:38.536|t:28208|worker.cpp:41|Start
+[info]|2026-05-17 22:48:38.538|t:7208|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:48:38.538|t:7208|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:48:38.538|t:7208|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:48:38.538|t:7208|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:48:40.626|t:28208|main.lua:1|load script ...
+[info]|2026-05-17 22:48:40.626|t:28208|main.lua:6|19
+[info]|2026-05-17 22:48:40.626|t:28208|main.lua:7|aaa
+[info]|2026-05-17 22:48:40.626|t:28208|main.lua:8|100
+[info]|2026-05-17 22:58:06.481|t:27712|:|RpcServerImpl(): quota_in=-1MB/s, quota_out=-1MB/s, max_pending_buffer_size=100MB, keep_alive_time=-1seconds
+[info]|2026-05-17 22:58:06.481|t:31448|worker.cpp:41|Start
+[info]|2026-05-17 22:58:06.482|t:27712|:|start_listen(): listen succeed: 127.0.0.1:34363
+[info]|2026-05-17 22:58:06.483|t:27712|:|Start(): listen succeed:: 127.0.0.1:99899
+[info]|2026-05-17 22:58:06.483|t:27712|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:58:06.483|t:27712|MyApp.cpp:118|NormalWorkerLogic::OnStartup
+[info]|2026-05-17 22:58:15.645|t:31448|main.lua:1|load script ...
+[info]|2026-05-17 22:58:15.645|t:31448|main.lua:6|19
+[info]|2026-05-17 22:58:15.645|t:31448|main.lua:7|aaa
+[info]|2026-05-17 22:58:15.645|t:31448|main.lua:8|100

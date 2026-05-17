@@ -1,0 +1,6 @@
+<root>
+    <win_tcp ip ="127.0.0.1" port="99899" />
+    <linux_tcp ip ="127.0.0.1" port="99899"/>
+    <win_http ip ="127.0.0.1" port="8888" />
+    <linux_http ip ="127.0.0.1" port="8080"/>
+</root>

@@ -1,0 +1,189 @@
+#include "MyApp.h"
+#include "network/net_manager/network_manager.h"
+#include "common/worker/worker_manager.h"
+#include "test.h"
+#include "common/res_path.h"
+#include "cxxopts.hpp"
+static bool is_net_init = false;
+
+
+async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
+{
+    try
+    {
+		gb::RpcCallPtr call = std::make_shared<gb::RpcCall>();
+		call->SetSession(session);
+		//co_await gb::CoRpc<>::execute(call, "test_rpc");
+
+		int num = co_await gb::CoRpc<int>::execute(call, "square", 10000);
+		LOG_INFO("CORO_TEST  {}", num);
+
+		auto [a, b] = co_await gb::CoRpc<int, std::string>::execute(call, "test_ret_args", 2, "world");
+		LOG_INFO("coro_test_2  {} {}", a, b);
+
+    }
+    catch (...)
+    {
+
+		LOG_ERROR("unkonw");
+    }
+}
+
+
+ MyApp::MyApp(int argc, char* argv[]) :App(argc,argv)
+{
+	cxxopts::Options options("client", "clien start");
+    options.add_options()
+        ("t,type", "process type",cxxopts::value<std::string>())
+        ("r,res", "resource path", cxxopts::value<std::string>());
+
+    auto result = options.parse(argc, argv);
+
+    if (result.count("type"))
+    {
+        appType_ = (APP_TYPE)result["type"].as<int>();
+    }
+
+    if (result.count("res"))
+    {
+        std::string res_path = result["res"].as<std::string>();
+        ResPath::Instance()->SetResRootPath(res_path);
+    }
+}
+
+int MyApp::OnInit()
+{
+	log.Init(ResPath::Instance()->FindResPath("log4/test.log").c_str(), 1024 * 1024 * 1000, 10,
+		   GbLog::ASYNC, GbLog::CONSOLE_AND_FILE, GbLog::LEVEL_INFO);
+
+    //gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
+    gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
+    
+    auto narmal_worker = work_mng->CreateWorker(std::make_shared<NormalWorkerLogic>());
+    gb::NetworkManager::Instance()->GetRouter().RegisterWorker(gb::SWT_Normal, narmal_worker);
+
+    gb::ClientOptions options;
+    options.keep_alive_time = -1;
+    client_.reset(new gb::Client(options));
+    gb::NetworkManager::Instance()->Init(client_.get());
+    
+    Test_Register();
+    
+	client_->SetCloseCallBack([](const gb::SessionPtr session) {
+        LOG_INFO("net close");
+    });
+
+	client_->SetConnnectCallBack([this](const gb::SessionPtr session) {
+        LOG_INFO("net connect");
+        is_net_init = true;
+        //session->StartHeartbeat(std::chrono::seconds(2));
+        
+        auto t1 = gb::WorkerManager::Instance()->GetWorker(0)->GetTimerManager()->RegisterTimer(
+            6000, []() {
+                LOG_ERROR("t1");
+            },
+            false);
+        gb::WorkerManager::Instance()->GetWorker(0)->GetTimerManager()->UnRegisterTimer(t1);
+        auto t2 = gb::WorkerManager::Instance()->GetWorker(0)->GetTimerManager()->RegisterTimer(
+            2000, []() {
+                LOG_ERROR("t2");
+            },
+            true);
+        auto t3 = gb::WorkerManager::Instance()->GetWorker(0)->GetTimerManager()->RegisterTimer(
+            10000, []() {
+                LOG_ERROR("t3");
+            },
+            false);
+
+        SendMsg1(client_);
+        gb::WorkerManager::Instance()->GetWorker(0)->Post([this]() {
+           //async_simple::coro::syncAwait(test_coro_2(client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)));
+           // SendRpc(client_);
+            test_coro_2(client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)).start([](auto&&) {});
+            });
+
+        //http_test(client_);
+    });
+
+    
+
+	auto [ip, port] = AppTypeMgr::Instance()->GetServerIpPort();
+	std::string uir = ip + ":" + port;
+    client_->Connect(gb::CONNECT_TYPE::CT_GATEWAY, uir);
+    test_http();
+    return 0;
+}
+
+int MyApp::OnStartup()
+{
+    gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
+    auto               workers  = work_mng->GetWorkers();
+    for (auto worker : workers)
+    {
+        if (worker)
+        {
+            worker->InitDriving(&tick_id_,&cvMutex_,&cv_);
+			worker->Post([worker]() {worker->OnStartup();});
+        }
+    }
+      
+    return 0;
+}
+
+int MyApp::OnUpdate(float elapsed)
+{
+    return 0;
+}
+
+int MyApp::OnTick()
+{
+    return 0;
+
+}
+
+int MyApp::OnCleanup()
+{
+    gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
+    auto               workers  = work_mng->GetWorkers();
+    for (auto worker : workers)
+    {
+        if (worker)
+            worker->Post([worker]() { worker->OnCleanup(); });
+    }
+    return 0;
+}
+
+int MyApp::OnUnInit()
+{
+    client_->Shutdown();
+    log.UnInit();
+    return 0;
+}
+
+void MyApp::test_http()
+{
+
+}
+
+
+int NormalWorkerLogic::OnStartup()
+{
+    LOG_INFO(__FUNCTION__);
+    return 0;
+}
+
+int NormalWorkerLogic::OnUpdate(float elapsed)
+{
+    return 0;
+}
+
+int NormalWorkerLogic::OnTick()
+{
+    return 0;
+}
+
+int NormalWorkerLogic::OnCleanup()
+{
+    LOG_INFO(__FUNCTION__);
+    return 0;
+}

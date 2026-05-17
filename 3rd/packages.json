@@ -1,0 +1,10 @@
+{
+    "packages": [
+        {
+            "name": "gbnet",
+            "version": "0.1.0",
+            "git": "https://github.com/wanglei-fenyu/gbnet_conan.git",
+            "tag": "v0.1.0"
+        }
+    ]
+}
