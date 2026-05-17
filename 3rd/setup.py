@@ -87,7 +87,7 @@ class ThirdPartyInstaller:
         self.print_info(f"Building {name}...")
         success, stdout, stderr = self.run_command(
             f"conan create . --version={version} --build=missing "
-            f"-o boost/*:without_cobalt=True",
+            f"-o boost:without_cobalt=True",
             cwd=package_dir
         )
         
