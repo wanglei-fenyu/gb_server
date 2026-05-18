@@ -1,6 +1,6 @@
 #pragma once
 
-#include "common\worker\worker.h"
+#include "common/worker/worker.h"
 #include "route_table.h"
 #include "message_type.h"
 namespace gb

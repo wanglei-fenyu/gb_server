@@ -4,6 +4,9 @@ add_executable(${TARGET_NAME})
 add_definitions(-DPROTOBUF_USE_DLLS)  # protobuf使用动态库
 add_compile_definitions(BOOST_ASIO_HAS_STD_THREAD) # asio使用std::thread
 
+target_compile_definitions(${TARGET_NAME} PRIVATE
+    BOOST_CHARCONV_DISABLE_FLOAT128
+)
 
 if(NOT COMMON_CPP_DIR)
     set(COMMON_CPP_DIR ${CMAKE_SOURCE_DIR}/src)

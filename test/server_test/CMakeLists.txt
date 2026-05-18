@@ -17,6 +17,11 @@ add_definitions(-DPROTOBUF_USE_DLLS)
 # Asio 使用 std::thread
 add_compile_definitions(BOOST_ASIO_HAS_STD_THREAD)
 
+#禁用 boost::charconv 的 __float128 支持 
+target_compile_definitions(${TARGET_NAME} PRIVATE
+    BOOST_CHARCONV_DISABLE_FLOAT128
+)
+
 # ========== 收集公共源码（src 目录）==========
 if(NOT COMMON_CPP_DIR)
     set(COMMON_CPP_DIR ${CMAKE_SOURCE_DIR}/src)

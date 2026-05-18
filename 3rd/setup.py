@@ -15,6 +15,7 @@ class ThirdPartyInstaller:
         self.root_dir = self.script_dir.parent
         self.temp_dir = self.script_dir / "temp"
         self.packages_file = self.script_dir / "packages.json"
+        self.profile_path = None   # 可设置的 profile 文件路径
         
     def print_info(self, msg):
         print(f"[INFO] {msg}")
@@ -27,6 +28,15 @@ class ThirdPartyInstaller:
     
     def print_warning(self, msg):
         print(f"[WARNING] {msg}")
+    
+    def set_profile(self, profile_path):
+        """设置 Conan profile 文件路径，转为绝对路径并检查存在性"""
+        path = Path(profile_path).resolve()
+        if not path.exists():
+            self.print_error(f"Profile file not found: {path}")
+            sys.exit(1)
+        self.profile_path = path
+        self.print_info(f"Using profile: {self.profile_path}")
     
     def run_command(self, cmd, cwd=None):
         try:
@@ -85,11 +95,32 @@ class ThirdPartyInstaller:
             return False
         
         self.print_info(f"Building {name}...")
-        success, stdout, stderr = self.run_command(
-            f"conan create . --version={version} --build=missing "
-            f"-o boost/*:without_cobalt=True",
-            cwd=package_dir
-        )
+        
+        # 验证 profile 是否有效（如果指定了）
+        if self.profile_path:
+            test_cmd = f'conan profile show --profile="{self.profile_path}"'
+            success, stdout, stderr = self.run_command(test_cmd)
+            if not success:
+                self.print_error(f"Profile {self.profile_path} is invalid: {stderr}")
+                return False
+            self.print_info("Profile validation passed.")
+        
+        # 构建 conan create 命令
+        cmd = f"conan create . --version={version} --build=missing"
+        if self.profile_path:
+            # 使用双引号包裹路径，避免空格；subprocess 的 shell=True 会正确处理
+            cmd += f' --profile="{self.profile_path}"'
+        # 可选：强制重新编译 Boost（如果 profile 中定义了宏）
+        # cmd += " --build=boost"
+        
+        self.print_info(f"Executing: {cmd}")
+        success, stdout, stderr = self.run_command(cmd, cwd=package_dir)
+        
+        # 输出命令的 stdout 和 stderr（前500字符）以便排查
+        if stdout:
+            self.print_info(f"stdout: {stdout[:500]}")
+        if stderr:
+            self.print_info(f"stderr: {stderr[:500]}")
         
         # 无论成功与否，都删除临时目录
         self.print_info(f"Cleaning up {package_dir}...")
@@ -105,11 +136,13 @@ class ThirdPartyInstaller:
     def install_all(self):
         self.print_info("Starting third-party packages installation...")
         
+        # 检查 Conan 是否可用
         success, _, _ = self.run_command("conan --version")
         if not success:
             self.print_error("Conan is not installed or not in PATH")
             return False
         
+        # 加载 packages.json
         if not self.packages_file.exists():
             self.print_error(f"Packages config not found: {self.packages_file}")
             return False
@@ -118,7 +151,6 @@ class ThirdPartyInstaller:
             config = json.load(f)
         
         packages = config.get('packages', [])
-        
         if not packages:
             self.print_warning("No packages found in config")
             return True
@@ -135,7 +167,7 @@ class ThirdPartyInstaller:
                 self.print_warning(f"Skipping invalid package config: {pkg}")
                 continue
             
-            # 先强制卸载旧的
+            # 先强制卸载旧的（避免版本冲突）
             self.print_info(f"Removing old {name}/{version} if exists...")
             self.run_command(f"conan remove {name}/{version} -c")
             time.sleep(1)
@@ -189,7 +221,6 @@ class ThirdPartyInstaller:
             self.run_command(f"conan remove {name}/{version} -c")
             self.print_success(f"  Removed {name}/{version}")
         
-        # 清理临时目录
         if self.temp_dir.exists():
             self.force_rmtree(self.temp_dir)
         
@@ -198,18 +229,43 @@ class ThirdPartyInstaller:
 def main():
     installer = ThirdPartyInstaller()
     
-    if len(sys.argv) > 1:
-        cmd = sys.argv[1].lower()
+    # 解析参数，支持 --profile <file>
+    args = sys.argv[1:]
+    profile = None
+    
+    # 手动查找 --profile 及其值
+    i = 0
+    while i < len(args):
+        if args[i] == '--profile':
+            if i + 1 < len(args):
+                profile = args[i + 1]
+                # 移除这两个元素
+                args.pop(i)
+                args.pop(i)
+                continue
+            else:
+                print("[ERROR] --profile requires a file path argument")
+                sys.exit(1)
+        i += 1
+    
+    # 如果提供了 profile，设置它（文件不存在会报错退出）
+    if profile:
+        installer.set_profile(profile)
+    
+    # 处理剩余命令
+    if len(args) > 0:
+        cmd = args[0].lower()
         if cmd == "list":
             installer.list_installed()
         elif cmd == "uninstall":
             installer.uninstall_all()
         elif cmd == "help":
             print("Usage:")
-            print("  python setup.py           - Install all packages")
-            print("  python setup.py list      - List installed packages")
-            print("  python setup.py uninstall - Uninstall all packages")
-            print("  python setup.py help      - Show this help")
+            print("  python setup.py                         - Install all packages")
+            print("  python setup.py --profile <file>        - Install using specified profile")
+            print("  python setup.py list                    - List installed packages")
+            print("  python setup.py uninstall               - Uninstall all packages")
+            print("  python setup.py help                    - Show this help")
         else:
             print(f"Unknown command: {cmd}")
     else:

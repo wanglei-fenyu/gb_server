@@ -37,6 +37,7 @@ find_package(cxxopts REQUIRED)
 add_compile_definitions(
     PROTOBUF_USE_DLLS
     BOOST_ASIO_HAS_STD_THREAD
+    BOOST_CHARCONV_DISABLE_FLOAT128
 )
 
 # 设置静态库和动态库的输出目录

@@ -28,7 +28,7 @@ macro(conan_link_libraries target_name)
         endif()
     endforeach()
     
-    # 直接使用 target 链接（头文件和库会自动传递）
+    # 原有的 Conan 依赖
     target_link_libraries(${target_name} ${_link_type}
         gbnet::gbnet
         Boost::boost
@@ -46,8 +46,14 @@ macro(conan_link_libraries target_name)
         sol2::sol2
         cxxopts::cxxopts
     )
+    
+    # Linux 下额外链接 
+    if(LINUX)
+        target_link_options(${target_name} ${_link_type}
+       	 "LINKER:--push-state,--no-as-needed,-lquadmath,--pop-state"
+        )
+    endif()
 endmacro()
-
 
 
 # 环境信息
@@ -78,6 +84,7 @@ if(LINUX)
     set(CMAKE_CXX_FLAGS_RELEASE "-g -O2")
     set(CMAKE_CXX_FLAGS_ASAN "-g -Og -fsanitize=address -fsanitize-recover=address -fno-omit-frame-pointer -fsanitize=leak")
     string(APPEND CMAKE_CXX_FLAGS "  -pthread -fcoroutines -Wall -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unused-function -Wunused-result ")
+    #set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -lquadmath")
 elseif(WIN32)
 
 else()

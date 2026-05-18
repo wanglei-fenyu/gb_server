@@ -1,5 +1,4 @@
 @echo off
-chcp 65001 >nul
 setlocal enabledelayedexpansion
 
 echo ========================================
@@ -7,7 +6,7 @@ echo GBServer - Install Dependencies
 echo ========================================
 echo.
 
-:: 检查 Python
+:: Check Python
 echo [1/4] Checking Python...
 python --version >nul 2>&1
 if errorlevel 1 (
@@ -19,7 +18,7 @@ if errorlevel 1 (
 echo [OK] Python found
 echo.
 
-:: 检查 Conan
+:: Check Conan
 echo [2/4] Checking Conan...
 conan --version >nul 2>&1
 if errorlevel 1 (
@@ -34,20 +33,42 @@ if errorlevel 1 (
 echo [OK] Conan found
 echo.
 
-:: 安装第三方包
-echo [3/4] Installing third-party packages...
-cd 3rd
-call setup.bat
-if errorlevel 1 (
-    cd ..
-    echo [ERROR] Failed to install third-party packages
-    pause
-    exit /b 1
+:: Prepare arguments for setup.bat
+if "%~1"=="" (
+    echo [INFO] No arguments provided for third-party installation.
+    set /p "USER_ARGS=Enter arguments (e.g., --profile "myprofile.profile"): "
+    if "!USER_ARGS!"=="" (
+        echo [WARNING] No arguments entered, proceeding without arguments.
+        set "SETUP_ARGS="
+    ) else (
+        set "SETUP_ARGS=!USER_ARGS!"
+    )
+) else (
+    set "SETUP_ARGS=%*"
 )
-cd ..
+
+:: Install third-party packages
+echo [3/4] Installing third-party packages...
+if exist "3rd\setup.bat" (
+    pushd 3rd
+    if defined SETUP_ARGS (
+        call setup.bat !SETUP_ARGS!
+    ) else (
+        call setup.bat
+    )
+    if errorlevel 1 (
+        popd
+        echo [ERROR] Failed to install third-party packages
+        pause
+        exit /b 1
+    )
+    popd
+) else (
+    echo [WARNING] 3rd\setup.bat not found, skipping third-party installation.
+)
 echo.
 
-:: 安装 Conan 依赖
+:: Install Conan dependencies
 echo [4/4] Installing Conan dependencies...
 conan install . --build=missing
 if errorlevel 1 (

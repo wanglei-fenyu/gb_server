@@ -36,14 +36,32 @@ fi
 echo -e "${GREEN}[OK] Conan found${NC}"
 echo ""
 
+# 处理参数：如果没有参数，则提示用户输入（模拟 bat 行为）
+if [ $# -eq 0 ]; then
+    echo -e "${YELLOW}[INFO] No arguments provided for third-party installation.${NC}"
+    read -p "Enter arguments (e.g., --profile \"myprofile.profile\"): " user_args
+    if [ -z "$user_args" ]; then
+        echo -e "${YELLOW}[WARNING] No arguments entered, proceeding without arguments.${NC}"
+        set --   # 清空参数列表
+    else
+        # 将用户输入的字符串转换为位置参数（用户需自行对含空格的参数加引号）
+        eval "set -- $user_args"
+    fi
+fi
+
 # 安装第三方包
 echo "[3/4] Installing third-party packages..."
 cd 3rd
 chmod +x setup.sh
-./setup.sh
+# 使用 "$@" 正确传递所有参数（包括空格和引号）
+./setup.sh "$@"
 if [ $? -ne 0 ]; then
     cd ..
     echo -e "${RED}[ERROR] Failed to install third-party packages${NC}"
+    echo -e "${YELLOW}[HINT] If you see Git connection errors (e.g., Failed to connect to github.com), please check your network or configure proxy:${NC}"
+    echo "  git config --global http.proxy http://proxy:port"
+    echo "  git config --global https.proxy https://proxy:port"
+    echo "  Or use SSH: set GIT_URL to git@github.com:user/repo.git in packages.json"
     exit 1
 fi
 cd ..
