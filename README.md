@@ -20,6 +20,6 @@ c++ 网络游戏服务器框架
         [conf]
         tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]
     2. 执行 install_deps.sh
-    3. conan install . -of build -pr=profiles/linux_debug_profile --build=missing（路径可换）
+    3. conan install . -pr=profiles/linux_debug_profile --build=missing（路径可换）
     4. cmake --preset conan-debug
     5. cmake --build --preset conan-debug --parallel
