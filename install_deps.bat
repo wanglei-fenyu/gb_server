@@ -7,7 +7,7 @@ echo ========================================
 echo.
 
 :: Check Python
-echo [1/4] Checking Python...
+echo [1/3] Checking Python...
 python --version >nul 2>&1
 if errorlevel 1 (
     echo [ERROR] Python is not installed or not in PATH
@@ -19,7 +19,7 @@ echo [OK] Python found
 echo.
 
 :: Check Conan
-echo [2/4] Checking Conan...
+echo [2/3] Checking Conan...
 conan --version >nul 2>&1
 if errorlevel 1 (
     echo [INFO] Conan not found, installing...
@@ -36,7 +36,7 @@ echo.
 :: Prepare arguments for setup.bat
 if "%~1"=="" (
     echo [INFO] No arguments provided for third-party installation.
-    set /p "USER_ARGS=Enter arguments (e.g., --profile "myprofile.profile"): "
+    set /p "USER_ARGS=Enter arguments (e.g., --profile "myprofile.profile" [Please use the absolute path]): "
     if "!USER_ARGS!"=="" (
         echo [WARNING] No arguments entered, proceeding without arguments.
         set "SETUP_ARGS="
@@ -48,7 +48,7 @@ if "%~1"=="" (
 )
 
 :: Install third-party packages
-echo [3/4] Installing third-party packages...
+echo [3/3] Installing third-party packages...
 if exist "3rd\setup.bat" (
     pushd 3rd
     if defined SETUP_ARGS (
@@ -68,22 +68,14 @@ if exist "3rd\setup.bat" (
 )
 echo.
 
-:: Install Conan dependencies
-echo [4/4] Installing Conan dependencies...
-conan install . --build=missing
-if errorlevel 1 (
-    echo [ERROR] Failed to install Conan dependencies
-    pause
-    exit /b 1
-)
-echo.
 
 echo ========================================
 echo [SUCCESS] All dependencies installed!
 echo ========================================
 echo.
 echo Next steps:
-echo   cmake --preset conan-default
-echo   cmake --build --preset conan-release
+echo   conan install . --build=missing -s build_type=Debug
+echo   cmake --preset conan-debug
+echo   cmake --build --preset conan-debug
 echo.
 pause
