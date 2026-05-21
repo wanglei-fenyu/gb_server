@@ -14,7 +14,7 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # 检查 Python
-echo "[1/4] Checking Python..."
+echo "[1/3] Checking Python..."
 if ! command -v python3 &> /dev/null; then
     echo -e "${RED}[ERROR] Python3 is not installed${NC}"
     echo "Please install Python 3.7+"
@@ -24,7 +24,7 @@ echo -e "${GREEN}[OK] Python3 found${NC}"
 echo ""
 
 # 检查 Conan
-echo "[2/4] Checking Conan..."
+echo "[2/3] Checking Conan..."
 if ! command -v conan &> /dev/null; then
     echo -e "${YELLOW}[INFO] Conan not found, installing...${NC}"
     pip3 install conan
@@ -39,7 +39,7 @@ echo ""
 # 处理参数：如果没有参数，则提示用户输入（模拟 bat 行为）
 if [ $# -eq 0 ]; then
     echo -e "${YELLOW}[INFO] No arguments provided for third-party installation.${NC}"
-    read -p "Enter arguments (e.g., --profile \"myprofile.profile\"): " user_args
+    read -p "Enter arguments (e.g., --profile \"myprofile.profile\" [Please use the absolute path]): " user_args
     if [ -z "$user_args" ]; then
         echo -e "${YELLOW}[WARNING] No arguments entered, proceeding without arguments.${NC}"
         set --   # 清空参数列表
@@ -50,7 +50,7 @@ if [ $# -eq 0 ]; then
 fi
 
 # 安装第三方包
-echo "[3/4] Installing third-party packages..."
+echo "[3/3] Installing third-party packages..."
 cd 3rd
 chmod +x setup.sh
 # 使用 "$@" 正确传递所有参数（包括空格和引号）
@@ -67,20 +67,13 @@ fi
 cd ..
 echo ""
 
-# 安装 Conan 依赖
-echo "[4/4] Installing Conan dependencies..."
-conan install . --build=missing
-if [ $? -ne 0 ]; then
-    echo -e "${RED}[ERROR] Failed to install Conan dependencies${NC}"
-    exit 1
-fi
-echo ""
 
 echo "========================================"
 echo -e "${GREEN}[SUCCESS] All dependencies installed!${NC}"
 echo "========================================"
 echo ""
 echo "Next steps:"
+echo "  conan install . --build=missing -s build_type=Debug"
 echo "  cmake --preset conan-default"
 echo "  cmake --build --preset conan-release"
 echo ""
