@@ -19,7 +19,7 @@ class GBServer(ConanFile):
         self.requires("protobuf/3.21.12")     
         self.requires("openssl/3.0.13")        
         self.requires("zlib/1.3.1")           
-        self.requires("async_simple/1.0.0")
+        self.requires("async_simple/1.4.0")
         self.requires("concurrentqueue/1.0.5")
         self.requires("lua/5.4.6")
         self.requires("mimalloc/2.1.2")
