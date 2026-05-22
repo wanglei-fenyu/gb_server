@@ -79,6 +79,19 @@ foreach(LUA_SCRIPT ${LUA_SCRIPTS})
     )
 endforeach()
 
+# 将 core.so 复制到 socket 目录（Linux/Unix）
+if(UNIX)
+    add_custom_command(
+        TARGET gbluasocket POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            ${CMAKE_BINARY_DIR}/$<CONFIG>/bin/socket/
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            $<TARGET_FILE:gbluasocket>
+            ${CMAKE_BINARY_DIR}/$<CONFIG>/bin/socket/
+        COMMENT "Copying core.so to socket directory"
+    )
+endif()
+
 # 安装规则
 install(TARGETS gbluasocket
     RUNTIME DESTINATION bin/socket
