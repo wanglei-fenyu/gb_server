@@ -41,7 +41,9 @@ async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
 
     if (result.count("type"))
     {
-        appType_ = (APP_TYPE)result["type"].as<int>();
+        std::string typeStr   = result["type"].as<std::string>();
+        int         typeValue = std::stoi(typeStr);
+        appType_              = (APP_TYPE)typeValue;
     }
 
     if (result.count("res"))
