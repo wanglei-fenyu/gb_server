@@ -11,7 +11,7 @@ os=Linux
 boost/*:without_cobalt=True
 
 [conf]
-tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]
+tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128","-Wno-register"]
 tools.build:skip_test=True
 tools.build:jobs=8
 
