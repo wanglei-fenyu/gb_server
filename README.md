@@ -8,7 +8,7 @@ c++ 网络游戏服务器框架
     3.  三选1 
         conan install . --build=missing 
         conan install . --build=missing -s build_type=Debug
-        conan install . -pr=profiles/win_debug_profile --build=missin  （路径可换）
+        conan install . -pr=profiles/win_debug_profile --build=missing  （路径可换）
     4. cmake --preset conan-debug
     5. cmake --build --preset conan-debug --parallel
 
