@@ -3,7 +3,7 @@ include_guard()
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)  #防止使用c++20之下的编译器
 set(CMAKE_CXX_EXTENSIONS OFF)        #禁止使用编译器的扩展
 
