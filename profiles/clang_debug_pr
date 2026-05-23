@@ -14,3 +14,7 @@ boost/*:without_cobalt=True
 tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]
 tools.build:skip_test=True
 tools.build:jobs=8
+
+[buildenv]
+CC=clang-22
+CXX=clang++-22
