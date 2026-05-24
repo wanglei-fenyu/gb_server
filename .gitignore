@@ -6,7 +6,7 @@ Release/
 tools/luasocket/.vs
 tools/luasocket/test
 *.exe
-!tools/proto.exe
+!proto.exe
 *.dll
 *.lib
 *.obj
