@@ -1,10 +1,10 @@
 [settings]
 arch=x86_64
-build_type=Release
+build_type=Debug
 compiler=msvc
-compiler.cppstd=20
+compiler.cppstd=23
 compiler.runtime=dynamic
-compiler.version=193
+compiler.version=195
 os=Windows
 
 [options]
@@ -14,3 +14,8 @@ boost/*:without_cobalt=True
 tools.build:cxxflags+=["/DBOOST_CHARCONV_DISABLE_FLOAT128"]
 tools.build:skip_test=True
 tools.build:jobs=8
+
+[buildenv]
+CC="cl"
+CXX="cl"
+VS_INSTALL_PATH="C:/Program Files/Microsoft Visual Studio/18/Community"
