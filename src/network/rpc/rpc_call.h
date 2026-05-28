@@ -2,6 +2,7 @@
 #include "network/session/session.h"
 #include "rpc_function.hpp"
 #include "network/network_function.hpp"
+#include "network/scheduler/executor.h"
 #include <atomic>
 #include <mutex>
 
@@ -44,7 +45,7 @@ public:
     void                      SetCancel(std::function<void()> cancel_fun);
     void                      SetTimeout(int64_t timeout);
     void                      SetSession(const std::shared_ptr<Session>& session);
-    void                      BindCurrentWorker();
+    void                      BindCurrentExecutor();
     std::shared_ptr<Session>& GetSession() { return session_; }
     void                      Call(Meta& meta,const ReadBufferPtr buffer = nullptr);
     //void                      Call(Meta& meta, std::vector<uint8_t>& data);
@@ -59,6 +60,8 @@ public:
 
 private:
     void StartTimer();
+    void Finish(RpcErrorCode error_code, std::function<void()> completion, bool remove_call);
+    void StopTimer();
     void DispatchCompletion(std::function<void()> cb) const;
 
 private:
@@ -71,11 +74,11 @@ private:
     std::function<void()>     cancel_func_;
     std::atomic<bool>         is_cancel_;      //是否已经取消
     std::atomic<bool>         finished_;
-    std::weak_ptr<Worker>     callback_worker_;
+    Executor                  callback_executor_;
     mutable std::mutex        callback_mutex_;
     std::shared_ptr<Session>  session_;        //网络会话
     rpc_done_call             done_call_bcak_; //回调函数
-    RpcErrorCode              error_code_;     //错误码
+    std::atomic<RpcErrorCode> error_code_;     //错误码
 };
 
 template <class F>
