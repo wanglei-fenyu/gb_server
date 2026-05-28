@@ -53,15 +53,15 @@ namespace gb
         return workers[index];
     }
 
-	Executor Router::GetServiceExecutor(MessageType message_type, uint64 route_id) const
+	WorkerExecutor Router::GetServiceExecutor(MessageType message_type, uint64 route_id) const
 	{
         auto workers = route_table_.GetWorker(route_table_.ResolveServiceWorkerType(message_type));
         auto target  = PickWorker(workers, message_type, route_id).lock();
         if (!target)
-            return Executor::Current();
+            return WorkerExecutor::Main();
         auto executor = target->GetExecutor();
         if (!executor)
-            return Executor::Worker(target);
+            return WorkerExecutor::Worker(target);
         return *executor;
 	}
 }

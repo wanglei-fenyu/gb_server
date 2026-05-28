@@ -1,8 +1,8 @@
 @echo off
 setlocal enabledelayedexpansion
 
-set PROJECT_ROOT=%USERPROFILE%\workspace\gb_server
-set RES_PATH=%PROJECT_ROOT%\res
+set "PROJECT_ROOT=%~dp0"
+set RES_PATH=%PROJECT_ROOT%res
 set BUILD_TYPE=
 set EXE_NAME=
 
@@ -31,7 +31,7 @@ if "%BUILD_TYPE%"=="" (
 
 if "%EXE_NAME%"=="" (
     echo Executable name not specified.
-    set /p "EXE_NAME=Enter executable name (e.g., server_test): "
+    set /p "EXE_NAME=Enter executable name (e.g., server_test.exe): "
     if "!EXE_NAME!"=="" (
         echo Error: Executable name cannot be empty.
         pause
@@ -39,7 +39,7 @@ if "%EXE_NAME%"=="" (
     )
 )
 
-set "CLIENT_EXE=%PROJECT_ROOT%\build\%BUILD_TYPE%\%BUILD_TYPE%\bin\%EXE_NAME%"
+set "CLIENT_EXE=%PROJECT_ROOT%build\%BUILD_TYPE%\%BUILD_TYPE%\bin\%EXE_NAME%"
 
 echo Starting client...
 echo Build type: %BUILD_TYPE%

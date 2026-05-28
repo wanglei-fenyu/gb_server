@@ -21,3 +21,4 @@ tools.cmake.cmaketoolchain:generator=Ninja
 CC="cl"
 CXX="cl"
 VS_INSTALL_PATH="C:/Program Files/Microsoft Visual Studio/18/Community"
+

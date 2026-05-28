@@ -8,63 +8,63 @@
 namespace gb
 {
 
-class Executor;
+class WorkerExecutor;
 
 class GbAsyncExecutor : public async_simple::Executor
 {
 public:
-    explicit GbAsyncExecutor(const std::shared_ptr<Executor>& owner) :
+    explicit GbAsyncExecutor(const std::shared_ptr<WorkerExecutor>& owner) :
         async_simple::Executor("gb_executor"), executor_(owner)
     {
     }
 
     bool schedule(Func func) override;
     bool currentThreadInExecutor() const override;
-    ExecutorStat stat() const override { return {}; }
-    IOExecutor*  getIOExecutor() override { return nullptr; }
+    async_simple::ExecutorStat stat() const override { return {}; }
+    async_simple::IOExecutor*  getIOExecutor() override { return nullptr; }
 
 private:
-    std::weak_ptr<Executor> executor_{};
+    std::weak_ptr<WorkerExecutor> executor_{};
 };
 
-class Executor
+class WorkerExecutor
 {
 public:
     using Func = std::function<void()>;
 
-    Executor() = default;
-    Executor(WorkerWeakPtr worker, bool inline_fallback = true) :
+    WorkerExecutor() = default;
+    WorkerExecutor(WorkerWeakPtr worker, bool inline_fallback = true) :
         worker_(std::move(worker)), inline_fallback_(inline_fallback)
     {
     }
-    Executor(std::function<void(Func)> dispatch, std::function<bool()> in_executor, bool inline_fallback = true) :
+    WorkerExecutor(std::function<void(Func)> dispatch, std::function<bool()> in_executor, bool inline_fallback = true) :
         dispatch_(std::move(dispatch)),
         in_executor_(std::move(in_executor)),
         inline_fallback_(inline_fallback)
     {
     }
 
-    Executor(const Executor&) = default;
-    Executor& operator=(const Executor&) = default;
-    Executor(Executor&&) noexcept = default;
-    Executor& operator=(Executor&&) noexcept = default;
+    WorkerExecutor(const WorkerExecutor&) = default;
+    WorkerExecutor& operator=(const WorkerExecutor&) = default;
+    WorkerExecutor(WorkerExecutor&&) noexcept = default;
+    WorkerExecutor& operator=(WorkerExecutor&&) noexcept = default;
 
-    static Executor Main(bool inline_fallback = true)
+    static WorkerExecutor Main(bool inline_fallback = true)
     {
-        return Executor(
+        return WorkerExecutor(
             [](Func fn) { WorkerManager::Instance()->PostMain(std::move(fn)); },
             []() { return WorkerManager::Instance()->IsMainThread(); },
             inline_fallback);
     }
 
-    static Executor Current(bool inline_fallback = true)
+    static WorkerExecutor Current(bool inline_fallback = true)
     {
-        return Executor(WorkerManager::Instance()->GetCurWorker(), inline_fallback);
+        return WorkerExecutor(WorkerManager::Instance()->GetCurWorker(), inline_fallback);
     }
 
-    static Executor Worker(WorkerWeakPtr worker, bool inline_fallback = true)
+    static WorkerExecutor Worker(WorkerWeakPtr worker, bool inline_fallback = true)
     {
-        return Executor(std::move(worker), inline_fallback);
+        return WorkerExecutor(std::move(worker), inline_fallback);
     }
 
     bool HasWorker() const

@@ -17,7 +17,7 @@ namespace gb
         void SetRouteKeySelector(std::function<uint64_t(MessageType, uint64_t)> selector);
         void SetWorkerIndexSelector(std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> selector);
 		
-		Executor GetServiceExecutor(MessageType message_type, uint64 route_id) const;
+		WorkerExecutor GetServiceExecutor(MessageType message_type, uint64 route_id) const;
 
 	private:
         WorkerWeakPtr PickWorker(const std::vector<WorkerWeakPtr>& workers, MessageType message_type, uint64 route_id) const;

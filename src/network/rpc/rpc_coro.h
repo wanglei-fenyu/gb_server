@@ -20,7 +20,7 @@ template <typename T>
 class RpcAwaitState
 {
 public:
-    void Bind(std::coroutine_handle<> handle, Executor exec)
+    void Bind(std::coroutine_handle<> handle, WorkerExecutor exec)
     {
         handle_   = handle;
         executor_ = std::move(exec);
@@ -65,7 +65,7 @@ private:
 private:
     std::optional<T>        result_{};
     std::coroutine_handle<> handle_{};
-    Executor                executor_;
+    WorkerExecutor                executor_;
     std::atomic<bool>       suspend_finished_{false};
     std::atomic<bool>       completed_{false};
 };
@@ -74,7 +74,7 @@ template <>
 class RpcAwaitState<void>
 {
 public:
-    void Bind(std::coroutine_handle<> handle, Executor exec)
+    void Bind(std::coroutine_handle<> handle, WorkerExecutor exec)
     {
         handle_   = handle;
         executor_ = std::move(exec);
@@ -105,7 +105,7 @@ private:
 
 private:
     std::coroutine_handle<> handle_{};
-    Executor                executor_;
+    WorkerExecutor                executor_;
     std::atomic<bool>       suspend_finished_{false};
     std::atomic<bool>       completed_{false};
 };
@@ -142,7 +142,7 @@ public:
     {
         // Capture the current executor before invoking the binder so that any
         // synchronous completion still finds a valid executor reference.
-        state_->Bind(handle, Executor::Current(true));
+        state_->Bind(handle, WorkerExecutor::Current(true));
         binder_(state_);
         return !state_->FinishSuspend();
     }
@@ -172,7 +172,7 @@ public:
 
     bool await_suspend(std::coroutine_handle<> handle)
     {
-        state_->Bind(handle, Executor::Current(true));
+        state_->Bind(handle, WorkerExecutor::Current(true));
         binder_(state_);
         return !state_->FinishSuspend();
     }

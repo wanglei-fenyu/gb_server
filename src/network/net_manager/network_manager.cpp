@@ -136,7 +136,7 @@ void NetworkManager::UnRegister(std::string method)
 	rpc_interface_map_.erase(key);
 }
 
-Executor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t route_id) const
+WorkerExecutor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t route_id) const
 {
     return router_.GetServiceExecutor((MessageType)type, route_id);
 }

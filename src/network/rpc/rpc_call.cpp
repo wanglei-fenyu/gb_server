@@ -48,7 +48,7 @@ void RpcCall::SetSession(const std::shared_ptr<Session>& session)
 void RpcCall::BindCurrentExecutor()
 {
     std::lock_guard<std::mutex> lock(callback_mutex_);
-    callback_executor_ = Executor::Current(false);
+    callback_executor_ = WorkerExecutor::Current(false);
 }
 
 void RpcCall::Call(Meta& meta, const ReadBufferPtr buffer /*= nullptr*/)
@@ -170,7 +170,7 @@ void RpcCall::DispatchCompletion(std::function<void()> cb) const
 {
     if (!cb)
         return;
-    Executor executor;
+    WorkerExecutor executor;
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
         executor = callback_executor_;

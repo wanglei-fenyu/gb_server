@@ -22,7 +22,7 @@ void Worker::Init(uint32_t id, size_t index)
 {
     thread_id_ = id;
     index_     = index;
-    executor_  = std::make_shared<Executor>(weak_from_this(), false);
+    executor_  = std::make_shared<WorkerExecutor>(weak_from_this(), false);
     async_executor_ = std::make_shared<GbAsyncExecutor>(executor_);
 }
 
@@ -141,7 +141,7 @@ std::unique_ptr<TimerManager>& Worker::GetTimerManager()
     return timer_manager_;
 }
 
-std::shared_ptr<Executor> Worker::GetExecutor() const
+std::shared_ptr<WorkerExecutor> Worker::GetExecutor() const
 {
     return executor_;
 }

@@ -20,7 +20,7 @@ class Executor;
 
 namespace gb
 {
-class Executor;
+class WorkerExecutor;
 class GbAsyncExecutor;
 
 class Worker : public std::enable_shared_from_this<Worker>
@@ -51,7 +51,7 @@ public:
 
 public:
     std::unique_ptr<TimerManager>& GetTimerManager();
-    std::shared_ptr<Executor>      GetExecutor() const;
+    std::shared_ptr<WorkerExecutor>      GetExecutor() const;
     async_simple::Executor*        getAsyncSimpleExecutor() const;
 
 private:
@@ -68,7 +68,7 @@ private:
     std::condition_variable event_cv_;
 
     std::shared_ptr<IWorkerLogic>    worker_logic_;
-    std::shared_ptr<Executor>        executor_;
+    std::shared_ptr<WorkerExecutor>        executor_;
     std::shared_ptr<GbAsyncExecutor> async_executor_;
 };
 

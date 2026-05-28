@@ -80,7 +80,7 @@ private:
     std::function<void()>     timeout_func_;
     std::function<void()>     cancel_func_;
     std::atomic<RpcState>     state_;
-    Executor                  callback_executor_;
+    WorkerExecutor                  callback_executor_;
     mutable std::mutex        callback_mutex_;
     std::shared_ptr<Session>  session_;
     rpc_done_call             done_call_bcak_;
