@@ -5,7 +5,7 @@
 namespace gb
 {
 RpcCall::RpcCall() :
-    id_(0), timeout_(std::chrono::milliseconds(kRpcdefaultTimeout)), timeout_func_(nullptr), cancel_func_(nullptr), is_cancel_(false), finished_(false), session_(nullptr), done_call_bcak_(nullptr), timer_(std::nullopt), error_code_(RpcErrorCode::None)
+    id_(0), timeout_(std::chrono::milliseconds(kRpcdefaultTimeout)), timeout_func_(nullptr), cancel_func_(nullptr), state_(RpcState::Pending), session_(nullptr), done_call_bcak_(nullptr), timer_(std::nullopt)
 {
 }
 
@@ -53,17 +53,14 @@ void RpcCall::BindCurrentExecutor()
 
 void RpcCall::Call(Meta& meta, const ReadBufferPtr buffer /*= nullptr*/)
 {
-	error_code_.store(static_cast<std::underlying_type_t<RpcErrorCode>>(RpcErrorCode::None), std::memory_order_release);
-    finished_.store(false, std::memory_order_release);
-    is_cancel_.store(false, std::memory_order_release);
-	StartTimer();
+    state_.store(RpcState::Pending, std::memory_order_release);
+    StartTimer();
     if (session_)
     {
         if (buffer)
             session_->Send(&meta, buffer);
         else
             session_->Send(&meta);
-
     }
 }
 
@@ -71,12 +68,16 @@ void RpcCall::Call(Meta& meta, const ReadBufferPtr buffer /*= nullptr*/)
 
 void RpcCall::Cancel()
 {
+    RpcState expected = RpcState::Pending;
+    if (!state_.compare_exchange_strong(expected, RpcState::Cancelled, std::memory_order_acq_rel, std::memory_order_acquire))
+        return;
+
     std::function<void()> cancel_callback;
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
         cancel_callback = cancel_func_;
     }
-    Finish(RpcErrorCode::Cancel, std::move(cancel_callback), true);
+    Finish(std::move(cancel_callback), true);
 }
 
 bool RpcCall::HasCallBack() const
@@ -96,20 +97,20 @@ bool RpcCall::HasSession()
 
 void RpcCall::Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta& meta, int meta_size, int64_t data_size)
 {
-    if (finished_.exchange(true, std::memory_order_acq_rel))
+    RpcState expected = RpcState::Pending;
+    if (!state_.compare_exchange_strong(expected, RpcState::Completed, std::memory_order_acq_rel, std::memory_order_acquire))
         return;
+
     rpc_done_call callback;
     {
         std::lock_guard<std::mutex> lock(callback_mutex_);
         callback = done_call_bcak_;
     }
-    Finish(RpcErrorCode::None,
-           callback ? std::function<void()>([callback, session, buffer, meta = std::move(meta), meta_size, data_size]() mutable {
+    Finish(callback ? std::function<void()>([callback, session, buffer, meta = std::move(meta), meta_size, data_size]() mutable {
                callback(session, buffer, meta, meta_size, data_size);
            })
                     : std::function<void()>{},
-           false,
-           true);
+           false);
 }
 
 bool RpcCall::IsError()
@@ -119,40 +120,50 @@ bool RpcCall::IsError()
 
 RpcErrorCode RpcCall::ErrorCode() 
 {
-    return static_cast<RpcErrorCode>(error_code_.load(std::memory_order_acquire));
+    switch (state_.load(std::memory_order_acquire))
+    {
+    case RpcState::Timeout:        return RpcErrorCode::Timeout;
+    case RpcState::Cancelled:      return RpcErrorCode::Cancel;
+    case RpcState::InvalidRequest: return RpcErrorCode::InvalidRequest;
+    default:                       return RpcErrorCode::None;
+    }
 }
 
 void RpcCall::StartTimer()
 {
     if (!session_ || !timer_)
     {
+        RpcState expected = RpcState::Pending;
+        if (!state_.compare_exchange_strong(expected, RpcState::InvalidRequest, std::memory_order_acq_rel, std::memory_order_acquire))
+            return;
         std::function<void()> cancel_callback;
         {
             std::lock_guard<std::mutex> lock(callback_mutex_);
             cancel_callback = cancel_func_;
         }
-        Finish(RpcErrorCode::InvalidRequest, std::move(cancel_callback), true);
+        Finish(std::move(cancel_callback), true);
         return;
     }
-    is_cancel_.store(false, std::memory_order_release);
     timer_->expires_after(timeout_);
-	timer_->async_wait([self = shared_from_this()](const Error_code& error) {
-        if (self->is_cancel_.load(std::memory_order_acquire) || error == Asio::error::operation_aborted) {
+    timer_->async_wait([self = shared_from_this()](const Error_code& error) {
+        if (error == Asio::error::operation_aborted)
             return;
-        }
-        if (self->finished_.exchange(true, std::memory_order_acq_rel))
+
+        RpcState expected = RpcState::Pending;
+        if (!self->state_.compare_exchange_strong(expected, RpcState::Timeout, std::memory_order_acq_rel, std::memory_order_acquire))
             return;
-		LOG_WARN("RPC timeout {}", self->id_);
-		if (!error)
+
+        LOG_WARN("RPC timeout {}", self->id_);
+        if (!error)
         {
             std::function<void()> timeout_callback;
             {
                 std::lock_guard<std::mutex> lock(self->callback_mutex_);
                 timeout_callback = self->timeout_func_;
             }
-            self->Finish(RpcErrorCode::Timeout, std::move(timeout_callback), true, true);
+            self->Finish(std::move(timeout_callback), true);
         }
-	});
+    });
 }
 
 void RpcCall::DispatchCompletion(std::function<void()> cb) const
@@ -167,13 +178,8 @@ void RpcCall::DispatchCompletion(std::function<void()> cb) const
     executor.Dispatch(std::move(cb));
 }
 
-void RpcCall::Finish(RpcErrorCode error_code, std::function<void()> completion, bool remove_call, bool already_finished)
+void RpcCall::Finish(std::function<void()> completion, bool remove_call)
 {
-    if (!already_finished && finished_.exchange(true, std::memory_order_acq_rel))
-        return;
-
-    error_code_.store(static_cast<std::underlying_type_t<RpcErrorCode>>(error_code), std::memory_order_release);
-    is_cancel_.store(error_code == RpcErrorCode::Cancel, std::memory_order_release);
     StopTimer();
     if (remove_call)
         gb::NetworkManager::Instance()->RpcCancel(GetId());

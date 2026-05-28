@@ -24,6 +24,15 @@ enum class RpcErrorCode {
     InvalidRequest = 3,
 };
 
+// Internal lifecycle state — replaces the three separate atomics
+enum class RpcState : uint8_t {
+    Pending = 0,
+    Completed,
+    Timeout,
+    Cancelled,
+    InvalidRequest,
+};
+
 union SequenceId
 {
     struct
@@ -49,7 +58,6 @@ public:
     void                      BindCurrentExecutor();
     std::shared_ptr<Session>& GetSession() { return session_; }
     void                      Call(Meta& meta,const ReadBufferPtr buffer = nullptr);
-    //void                      Call(Meta& meta, std::vector<uint8_t>& data);
     void                      Cancel();
     bool                      HasCallBack() const;
     bool                      HasSession();
@@ -61,43 +69,37 @@ public:
 
 private:
     void StartTimer();
-    void Finish(RpcErrorCode error_code, std::function<void()> completion, bool remove_call, bool already_finished = false);
+    void Finish(std::function<void()> completion, bool remove_call);
     void StopTimer();
     void DispatchCompletion(std::function<void()> cb) const;
 
 private:
-    uint64_t                  id_;             //唯一标识
-    //std::chrono::milliseconds timeout_;        //超时时间
-    //int64_t                   timer_id_;       //计时器id
+    uint64_t                  id_;
     mutable std::optional<Asio::steady_timer> timer_;
-    std::chrono::steady_clock::duration timeout_;       //使用毫秒
-    std::function<void()>     timeout_func_;   //超时回调
+    std::chrono::steady_clock::duration timeout_;
+    std::function<void()>     timeout_func_;
     std::function<void()>     cancel_func_;
-    std::atomic<bool>         is_cancel_;      //是否已经取消
-    std::atomic<bool>         finished_;
+    std::atomic<RpcState>     state_;
     Executor                  callback_executor_;
     mutable std::mutex        callback_mutex_;
-    std::shared_ptr<Session>  session_;        //网络会话
-    rpc_done_call             done_call_bcak_; //回调函数
-    std::atomic<std::underlying_type_t<RpcErrorCode>> error_code_;     //错误码
+    std::shared_ptr<Session>  session_;
+    rpc_done_call             done_call_bcak_;
 };
 
 template <class F>
 inline void RpcCall::SetCallBack(F f)
 {
     rpc_listen_fun func;
-    if constexpr (std::is_same<F, sol::function>::value)
+    if constexpr (std::is_same_v<std::decay_t<F>, sol::function>)
     {
         auto            lua_state = f.lua_state();
         sol::state_view lua_view(lua_state);
         sol::state*     state = (sol::state*)&lua_view;
         func                  = RpcFunctionaTraits<sol::function>::make(state, f);
     }
-    else if constexpr (HasInvokeOperator<typename std::decay<F>::type>::value)
-        func = RpcLambdaFunc(f, &F::operator());
     else
     {
-        func = RpcFunctionaTraits<F>::make(f);
+        func = MakeRpcHandler(std::move(f));
     }
     std::lock_guard<std::mutex> lock(callback_mutex_);
     done_call_bcak_ = std::move(func);

@@ -45,12 +45,10 @@ public:
 	void Listen(uint32_t type, F f, std::string protoName = "")
 	{
 		net_listen_fun func;
-		if constexpr (std::is_same<F, sol::function>::value)
+		if constexpr (std::is_same_v<std::decay_t<F>, sol::function>)
 			func = NetFunctionaTraits<sol::function>::make(f, protoName);
-		else if constexpr (HasInvokeOperator<typename std::decay<F>::type>::value)
-			func = ServerLambdaFunc(f, &F::operator());
 		else
-			func = NetFunctionaTraits<F>::make(f);
+			func = MakeNetHandler(std::move(f));
 		ListenOption(type, std::move(func), protoName);
 	}
 
@@ -97,17 +95,17 @@ public:
 	template<typename F>
 	void Register(std::string method, F fn)
 	{
-		net_listen_fun func;
-		if constexpr (!std::is_same<F, sol::function>::value)
-			func = RpcFunctionaTraits<F>::make(fn);
-		else if constexpr (HasInvokeOperator<typename std::decay<F>::type>::value)
-			func = RpcLambdaFunc(fn, &F::operator());
-		else
+		rpc_listen_fun func;
+		if constexpr (std::is_same_v<std::decay_t<F>, sol::function>)
 		{
 			auto lua_state = fn.lua_state();
 			sol::state_view lua_view(lua_state);
 			sol::state* state = (sol::state*)&lua_view;
 			func = RpcFunctionaTraits<sol::function>::make(state, fn);
+		}
+		else
+		{
+			func = MakeRpcHandler(std::move(fn));
 		}
 		RegisterOption(method, func);
 	}
