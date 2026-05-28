@@ -34,8 +34,8 @@ namespace gb
      size_t index = 0;
      {
          std::lock_guard<std::mutex> lock(mutex_);
+         index = workers.size();
          workers.push_back(work);
-         index = workers.size() - 1;
      }
      worker_threads.emplace_back([work, index]() {
          std::thread::id id        = std::this_thread::get_id();
@@ -54,14 +54,8 @@ size_t WorkerManager::Size()
 
 gb::WorkerPtr WorkerManager::GetWorker(size_t index) const
 {
-     auto it = std::find_if(workers.begin(), workers.end(), [index](const WorkerPtr& work) {
-         return work->GetIndex() == index;
-     });
-     if (it != workers.end())
-     {
-         return *it;
-
-     }
+     if (index < workers.size())
+         return workers[index];
 	return nullptr;
 
 }

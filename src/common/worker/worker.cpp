@@ -45,7 +45,7 @@ void Worker::Run()
     while (runing_)
     {
         std::unique_lock<std::mutex> lk(event_mutex_);
-        event_cv_.wait_for(lk, std::chrono::milliseconds(1), [this]() { return !runing_.load() || events_.size_approx() > 0; });
+        event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() { return !runing_.load() || events_.size_approx() > 0; });
         lk.unlock();
         if (!runing_)
             break;

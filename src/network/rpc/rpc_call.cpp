@@ -112,9 +112,8 @@ void RpcCall::Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta&
     if (is_cancel_.load(std::memory_order_acquire) || !HasCallBack())
         return;
     auto callback = done_call_bcak_;
-    Meta meta_copy = meta;
-    DispatchCompletion([callback, session, buffer, meta_copy, meta_size, data_size]() mutable {
-        callback(session, buffer, meta_copy, meta_size, data_size);
+    DispatchCompletion([callback, session, buffer, meta = std::move(meta), meta_size, data_size]() mutable {
+        callback(session, buffer, meta, meta_size, data_size);
     });
 }
 
