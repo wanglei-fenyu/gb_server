@@ -12,9 +12,16 @@
 #include <mutex>
 
 #include "worker_logic_interface.h"
+
+namespace async_simple
+{
+class Executor;
+}
+
 namespace gb
 {
 class Executor;
+class GbAsyncExecutor;
 
 class Worker : public std::enable_shared_from_this<Worker>
 {
@@ -45,6 +52,7 @@ public:
 public:
     std::unique_ptr<TimerManager>& GetTimerManager();
     std::shared_ptr<Executor>      GetExecutor() const;
+    async_simple::Executor*        getAsyncSimpleExecutor() const;
 
 private:
     void InitLua();
@@ -59,8 +67,9 @@ private:
     std::mutex event_mutex_;
     std::condition_variable event_cv_;
 
-    std::shared_ptr<IWorkerLogic> worker_logic_;
-    std::shared_ptr<Executor>     executor_;
+    std::shared_ptr<IWorkerLogic>    worker_logic_;
+    std::shared_ptr<Executor>        executor_;
+    std::shared_ptr<GbAsyncExecutor> async_executor_;
 };
 
 using WorkerPtr = std::shared_ptr<Worker>;

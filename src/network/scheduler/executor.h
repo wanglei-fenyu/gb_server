@@ -2,66 +2,52 @@
 #include "common/worker/worker_manager.h"
 #include "async_simple/Executor.h"
 #include <functional>
+#include <memory>
 #include <utility>
 
 namespace gb
 {
 
-class Executor : public async_simple::Executor
+class Executor;
+
+class GbAsyncExecutor : public async_simple::Executor
 {
 public:
-    Executor() : async_simple::Executor("gb_executor") {}
+    explicit GbAsyncExecutor(const std::shared_ptr<Executor>& owner) :
+        async_simple::Executor("gb_executor"), executor_(owner)
+    {
+    }
+
+    bool schedule(Func func) override;
+    bool currentThreadInExecutor() const override;
+    ExecutorStat stat() const override { return {}; }
+    IOExecutor*  getIOExecutor() override { return nullptr; }
+
+private:
+    std::weak_ptr<Executor> executor_{};
+};
+
+class Executor
+{
+public:
+    using Func = std::function<void()>;
+
+    Executor() = default;
     Executor(WorkerWeakPtr worker, bool inline_fallback = true) :
-        async_simple::Executor("gb_executor"), worker_(std::move(worker)), inline_fallback_(inline_fallback)
+        worker_(std::move(worker)), inline_fallback_(inline_fallback)
     {
     }
     Executor(std::function<void(Func)> dispatch, std::function<bool()> in_executor, bool inline_fallback = true) :
-        async_simple::Executor("gb_executor"),
         dispatch_(std::move(dispatch)),
         in_executor_(std::move(in_executor)),
         inline_fallback_(inline_fallback)
     {
     }
 
-    Executor(const Executor& rhs) :
-        async_simple::Executor("gb_executor"),
-        worker_(rhs.worker_),
-        dispatch_(rhs.dispatch_),
-        in_executor_(rhs.in_executor_),
-        inline_fallback_(rhs.inline_fallback_)
-    {
-    }
-
-    Executor& operator=(const Executor& rhs)
-    {
-        if (this == &rhs)
-            return *this;
-        worker_          = rhs.worker_;
-        dispatch_        = rhs.dispatch_;
-        in_executor_     = rhs.in_executor_;
-        inline_fallback_ = rhs.inline_fallback_;
-        return *this;
-    }
-
-    Executor(Executor&& rhs) noexcept :
-        async_simple::Executor("gb_executor"),
-        worker_(std::move(rhs.worker_)),
-        dispatch_(std::move(rhs.dispatch_)),
-        in_executor_(std::move(rhs.in_executor_)),
-        inline_fallback_(rhs.inline_fallback_)
-    {
-    }
-
-    Executor& operator=(Executor&& rhs) noexcept
-    {
-        if (this == &rhs)
-            return *this;
-        worker_          = std::move(rhs.worker_);
-        dispatch_        = std::move(rhs.dispatch_);
-        in_executor_     = std::move(rhs.in_executor_);
-        inline_fallback_ = rhs.inline_fallback_;
-        return *this;
-    }
+    Executor(const Executor&) = default;
+    Executor& operator=(const Executor&) = default;
+    Executor(Executor&&) noexcept = default;
+    Executor& operator=(Executor&&) noexcept = default;
 
     static Executor Main(bool inline_fallback = true)
     {
@@ -99,12 +85,12 @@ public:
         return false;
     }
 
-    bool schedule(Func fn) override
+    bool schedule(Func fn)
     {
         return Dispatch(std::move(fn));
     }
 
-    bool currentThreadInExecutor() const override
+    bool currentThreadInExecutor() const
     {
         return IsCurrent();
     }
@@ -149,5 +135,17 @@ private:
     std::function<bool()>     in_executor_;
     bool                      inline_fallback_{true};
 };
+
+inline bool GbAsyncExecutor::schedule(Func func)
+{
+    auto executor = executor_.lock();
+    return executor ? executor->Dispatch(std::move(func)) : false;
+}
+
+inline bool GbAsyncExecutor::currentThreadInExecutor() const
+{
+    auto executor = executor_.lock();
+    return executor ? executor->IsCurrent() : false;
+}
 
 } // namespace gb
