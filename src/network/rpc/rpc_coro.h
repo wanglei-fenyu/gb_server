@@ -1,5 +1,6 @@
 #pragma once
 #include "async_simple/coro/Lazy.h"
+#include "network/scheduler/executor.h"
 #include <atomic>
 #include <coroutine>
 #include <functional>
@@ -19,9 +20,10 @@ template <typename T>
 class RpcAwaitState
 {
 public:
-    void Bind(std::coroutine_handle<> handle)
+    void Bind(std::coroutine_handle<> handle, Executor exec)
     {
-        handle_ = handle;
+        handle_   = handle;
+        executor_ = std::move(exec);
     }
 
     void Complete(T value)
@@ -54,12 +56,16 @@ private:
         if (completed_.exchange(true, std::memory_order_acq_rel))
             return;
         if (suspend_finished_.load(std::memory_order_acquire))
-            handle_.resume();
+        {
+            auto h = handle_;
+            executor_.Dispatch([h]() { h.resume(); });
+        }
     }
 
 private:
-    std::optional<T>       result_{};
+    std::optional<T>        result_{};
     std::coroutine_handle<> handle_{};
+    Executor                executor_;
     std::atomic<bool>       suspend_finished_{false};
     std::atomic<bool>       completed_{false};
 };
@@ -68,9 +74,10 @@ template <>
 class RpcAwaitState<void>
 {
 public:
-    void Bind(std::coroutine_handle<> handle)
+    void Bind(std::coroutine_handle<> handle, Executor exec)
     {
-        handle_ = handle;
+        handle_   = handle;
+        executor_ = std::move(exec);
     }
 
     void Resume()
@@ -90,11 +97,15 @@ private:
         if (completed_.exchange(true, std::memory_order_acq_rel))
             return;
         if (suspend_finished_.load(std::memory_order_acquire))
-            handle_.resume();
+        {
+            auto h = handle_;
+            executor_.Dispatch([h]() { h.resume(); });
+        }
     }
 
 private:
     std::coroutine_handle<> handle_{};
+    Executor                executor_;
     std::atomic<bool>       suspend_finished_{false};
     std::atomic<bool>       completed_{false};
 };
@@ -129,7 +140,9 @@ public:
 
     bool await_suspend(std::coroutine_handle<> handle)
     {
-        state_->Bind(handle);
+        // Capture the current executor before invoking the binder so that any
+        // synchronous completion still finds a valid executor reference.
+        state_->Bind(handle, Executor::Current(true));
         binder_(state_);
         return !state_->FinishSuspend();
     }
@@ -159,7 +172,7 @@ public:
 
     bool await_suspend(std::coroutine_handle<> handle)
     {
-        state_->Bind(handle);
+        state_->Bind(handle, Executor::Current(true));
         binder_(state_);
         return !state_->FinishSuspend();
     }
