@@ -18,9 +18,6 @@ public:
     
     void Invoke();
     template <typename... Args>
-    void Invoke(Args&... args);
-
-    template <typename... Args>
     void Invoke(Args&&... args);
 
     void Invoke(sol::variadic_args args);
@@ -31,16 +28,6 @@ private:
     Meta              meta_;
     std::shared_ptr<Session> session_;
 };
-
-template <typename... Args>
-inline void RpcReply::Invoke(Args&... args)
-{
-    if (!Valid())
-        return;
-
-    std::vector<uint8_t> data = gb::msgpack::pack<Args&&...>(std::forward<Args>(args)...);
-    Send(data);
-}
 
 template <typename... Args>
 inline void RpcReply::Invoke(Args&&... args)

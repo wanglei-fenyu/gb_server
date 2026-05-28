@@ -3,32 +3,29 @@
 
 namespace gb
 {
+
+namespace
+{
+// Per-thread pointer to the Worker currently executing on this thread.
+// Set when a worker thread enters Run() and cleared when it exits.
+thread_local WorkerPtr tl_current_worker;
+} // namespace
+
  WorkerManager::WorkerManager()
 {
-     //for (size_t i = 0; i < worker_num; i++)
-     //{
-     //    worker_threads.emplace_back([this,i]() {
-     //        WorkerPtr work = std::make_shared<Worker>();
-     //        std::thread::id id = std::this_thread::get_id();
-	    //     uint32_t thread_id = *((uint32_t*)&id);
-     //        work->Init(thread_id, i);
-     //        {
-				 //std::lock_guard<std::mutex> lock(mutex_);
-				 //workers.push_back(work);
-     //        }
-     //        work->OnStart();
-     //        work->Run();
-     //    });
-     //}
-
 }
 
  WorkerManager::~WorkerManager()
 {
- }
+    for (auto& worker : workers)
+        worker->Stop();
+    for (auto& thread : worker_threads)
+        if (thread.joinable())
+            thread.join();
+}
 
  WorkerPtr WorkerManager::CreateWorker(std::shared_ptr<IWorkerLogic> worker_logic)
- {
+{
 	 WorkerPtr       work      = std::make_shared<Worker>();
 	 work->SetWorkerLogic(worker_logic);
      size_t index = 0;
@@ -39,10 +36,12 @@ namespace gb
      }
      worker_threads.emplace_back([work, index]() {
          std::thread::id id        = std::this_thread::get_id();
-         uint32_t        thread_id = *((uint32_t*)&id);
+         uint32_t        thread_id = static_cast<uint32_t>(std::hash<std::thread::id>{}(id));
          work->Init(thread_id, index);
-		work->OnStart();
-		work->Run();
+         tl_current_worker = work;
+         work->OnStart();
+         work->Run();
+         tl_current_worker.reset();
      });
      return work;
  }
@@ -62,19 +61,7 @@ gb::WorkerPtr WorkerManager::GetWorker(size_t index) const
 
 gb::WorkerPtr WorkerManager::GetCurWorker() const
 {
-	 std::thread::id id = std::this_thread::get_id();
-	 uint32_t thread_id = *((uint32_t*)&id);
-      
-     auto it = std::find_if(workers.begin(), workers.end(), [thread_id](const WorkerPtr& work) {
-         return work->GetWorkerId() == thread_id;
-     });
-
-     if (it != workers.end())
-     {
-         return *it;
-
-     }
-     return nullptr;
+    return tl_current_worker;
 }
 
 std::vector<std::thread>& WorkerManager::GetThreads()

@@ -96,7 +96,7 @@ void NetworkManager::CallImpl(gb::Meta& meta, RpcCallPtr call, const ReadBufferP
 {
 	if (!call)
 		return;
-    call->BindCurrentWorker();
+    call->BindCurrentExecutor();
     {
         std::lock_guard<std::mutex> lock(rpc_caller_mutex_);
         if (!rpc_caller_map_.insert({meta.sequence, call}).second)
@@ -136,60 +136,53 @@ void NetworkManager::UnRegister(std::string method)
 	rpc_interface_map_.erase(key);
 }
 
+Executor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t route_id) const
+{
+    return Executor::Worker(router_.GetServiceWorker((MessageType)type, route_id));
+}
+
+net_listen_fun NetworkManager::FindListenFunction(uint32_t type)
+{
+    std::lock_guard<std::mutex> lock(listen_mutex_);
+    auto                        fun = listen_function_map_.find(type);
+    if (fun != listen_function_map_.end())
+        return fun->second;
+    return {};
+}
+
+rpc_listen_fun NetworkManager::FindRpcFunction(uint64_t method)
+{
+    std::lock_guard<std::mutex> lock(rpc_interface_mutex_);
+    auto                        fun = rpc_interface_map_.find(method);
+    if (fun != rpc_interface_map_.end())
+        return fun->second;
+    return {};
+}
+
 void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size)
 {
-
     switch (meta.mode)
     {
         case MsgMode::Msg:
         {
-            WorkerWeakPtr worker_weak_ptr = router_.GetServiceWorker((MessageType)meta.type, meta.id);
-            auto          worker          = worker_weak_ptr.lock();
-            net_listen_fun listen_func;
-            {
-                std::lock_guard<std::mutex> lock(listen_mutex_);
-                auto                        fun = listen_function_map_.find(meta.type);
-                if (fun != listen_function_map_.end())
-                    listen_func = fun->second;
-            }
+            auto          executor    = CreateExecutorForRoute(meta.type, meta.id);
+            net_listen_fun listen_func = FindListenFunction(meta.type);
             if (!listen_func)
                 return;
-            if (worker)
-            {
-                worker->Post([session = session, buffer = buffer, meta = meta, meta_size, data_size, listen_func = std::move(listen_func)]() mutable {
-                    listen_func(session, buffer, meta, meta_size, data_size);
-                });
-            }
-            else
-            {
+            executor.Dispatch([session = session, buffer = buffer, meta = meta, meta_size, data_size, listen_func = std::move(listen_func)]() mutable {
                 listen_func(session, buffer, meta, meta_size, data_size);
-            }
+            });
             break;
         }
         case MsgMode::Request:
         {
-            WorkerWeakPtr worker_weak_ptr = router_.GetServiceWorker((MessageType)meta.type, meta.id);
-            auto          worker          = worker_weak_ptr.lock();
-            rpc_listen_fun rpc_func;
-            {
-                std::lock_guard<std::mutex> lock(rpc_interface_mutex_);
-                auto                        func = rpc_interface_map_.find(meta.method);
-                if (func != rpc_interface_map_.end())
-                    rpc_func = func->second;
-            }
+            auto          executor = CreateExecutorForRoute(meta.type, meta.id);
+            rpc_listen_fun rpc_func = FindRpcFunction(meta.method);
             if (!rpc_func)
                 return;
-            if (worker)
-            {
-                worker->Post([session = session, buffer = buffer, meta = meta, meta_size, data_size, rpc_func = std::move(rpc_func)]() mutable {
-                    rpc_func(session, buffer, meta, meta_size, data_size);
-                });
-            }
-            else
-            {
-				rpc_func(session, buffer, meta, meta_size, data_size);
-            }
-
+            executor.Dispatch([session = session, buffer = buffer, meta = meta, meta_size, data_size, rpc_func = std::move(rpc_func)]() mutable {
+                rpc_func(session, buffer, meta, meta_size, data_size);
+            });
             break;
         }
         case MsgMode::Response:

@@ -76,15 +76,16 @@ int Worker::OnUpdate(float elapsed)
 {
     if (timer_manager_)
         timer_manager_->Update();
-	while(events_.size_approx() > 0)
-	{
-		std::function<void(void)> func;
-		events_.try_dequeue(func);
-		func();
-	}
+
+    std::function<void()> func;
+    while (events_.try_dequeue(func))
+    {
+        if (func)
+            func();
+    }
 
     if (worker_logic_)
-		worker_logic_->OnUpdate(elapsed);
+        worker_logic_->OnUpdate(elapsed);
     return 0;
 }
 

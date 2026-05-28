@@ -2,7 +2,6 @@
 #include "message_type.h"
 #include "log/log_help.h"
 #include "common/worker/worker.h"
-#include "router.h"
 namespace gb
 {
 
