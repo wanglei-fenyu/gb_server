@@ -1,13 +1,8 @@
 #include "network_manager.h"
-#include "../../common/worker/worker_manager.h"
 #include "app/app_def.h"
 #include "../net/server.h"
 
 NAMESPACE_BEGIN(gb)
-static thread_local NetworkManager::ListenMap       listen_function_map_{};
-static thread_local NetworkManager::RpcInterfaceMap rpc_interface_map_{};
-static thread_local NetworkManager::RpcCallerMap    rpc_caller_map_{};
-static thread_local int32_t sequence_tail_ = 0;
 
 void NetworkManager::Init(HandleInterface* handleInterface)
 {
@@ -27,24 +22,14 @@ void NetworkManager::Init(HandleInterface* handleInterface)
 
 uint64_t NetworkManager::GetSequence()
 {
-	auto work = WorkerManager::Instance()->GetCurWorker();
-	if (!work)
-	{
-		LOG_ERROR("cur not work thread");
-		return 0;
-	}
-	uint32_t   thread = work->GetWorkerId();
-	SequenceId Id;
-	Id.value = 0;
-	Id.index = work->GetIndex();
-	Id.seq   = sequence_tail_++;
-	return Id.value;
+    return sequence_tail_.fetch_add(1, std::memory_order_relaxed);
 }
 
 void NetworkManager::UnListen(uint32_t type, std::string signal, int level)
 {
 	//uint64_t key = (((uint64_t)type) << 32) + id;
     uint32_t key      = type;
+    std::lock_guard<std::mutex> lock(listen_mutex_);
 	auto p_FunsIt = listen_function_map_.find(key);
 	if (listen_function_map_.end() == p_FunsIt)
 	{
@@ -75,6 +60,7 @@ void NetworkManager::Send(std::shared_ptr<Session> session, uint32 type, uint64_
 void NetworkManager::ListenOption(uint32_t type, net_listen_fun f, std::string protoName)
 {
     uint64_t key              = type;
+    std::lock_guard<std::mutex> lock(listen_mutex_);
 	listen_function_map_[key] = f;
 }
 
@@ -110,10 +96,14 @@ void NetworkManager::CallImpl(gb::Meta& meta, RpcCallPtr call, const ReadBufferP
 {
 	if (!call)
 		return;
-	if (!rpc_caller_map_.insert({meta.sequence, call}).second)
-	{
-		LOG_ERROR("insert gs_RpcCallerMap fail seq:{} method{}", meta.sequence, meta.method);
-	}
+    call->BindCurrentWorker();
+    {
+        std::lock_guard<std::mutex> lock(rpc_caller_mutex_);
+        if (!rpc_caller_map_.insert({meta.sequence, call}).second)
+        {
+            LOG_ERROR("insert gs_RpcCallerMap fail seq:{} method{}", meta.sequence, meta.method);
+        }
+    }
 	if (buffer && buffer->TotalCount() > 0)
 	{
 		call->Call(meta, buffer);
@@ -126,6 +116,7 @@ void NetworkManager::CallImpl(gb::Meta& meta, RpcCallPtr call, const ReadBufferP
 
 void NetworkManager::RpcCancel(int64_t seq_id)
 {
+    std::lock_guard<std::mutex> lock(rpc_caller_mutex_);
 	auto it = rpc_caller_map_.find(seq_id);
 	if (it != rpc_caller_map_.end())
 		rpc_caller_map_.erase(it);
@@ -134,12 +125,14 @@ void NetworkManager::RpcCancel(int64_t seq_id)
 void NetworkManager::RegisterOption(std::string method, rpc_listen_fun fn)
 {
 	uint64_t key = MD5::MD5Hash64(method.c_str());
+    std::lock_guard<std::mutex> lock(rpc_interface_mutex_);
 	rpc_interface_map_.insert({key, fn});
 }
 
 void NetworkManager::UnRegister(std::string method)
 {
 	uint64_t key = MD5::MD5Hash64(method.c_str());
+    std::lock_guard<std::mutex> lock(rpc_interface_mutex_);
 	rpc_interface_map_.erase(key);
 }
 
@@ -152,19 +145,24 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         {
             WorkerWeakPtr worker_weak_ptr = router_.GetServiceWorker((MessageType)meta.type, meta.id);
             auto          worker          = worker_weak_ptr.lock();
+            net_listen_fun listen_func;
+            {
+                std::lock_guard<std::mutex> lock(listen_mutex_);
+                auto                        fun = listen_function_map_.find(meta.type);
+                if (fun != listen_function_map_.end())
+                    listen_func = fun->second;
+            }
+            if (!listen_func)
+                return;
             if (worker)
             {
-                worker->Post([this, session = session, buffer = buffer, meta = std::move(meta), meta_size, data_size]() mutable {
-                    auto     fun = listen_function_map_.find(meta.type);
-                    if (fun != listen_function_map_.end())
-                        fun->second(session, buffer, meta, meta_size, data_size);
+                worker->Post([session = session, buffer = buffer, meta = meta, meta_size, data_size, listen_func = std::move(listen_func)]() mutable {
+                    listen_func(session, buffer, meta, meta_size, data_size);
                 });
             }
             else
             {
-                auto     fun = listen_function_map_.find(meta.type);
-                    if (fun != listen_function_map_.end())
-                        fun->second(session, buffer, meta, meta_size, data_size);
+                listen_func(session, buffer, meta, meta_size, data_size);
             }
             break;
         }
@@ -172,151 +170,49 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         {
             WorkerWeakPtr worker_weak_ptr = router_.GetServiceWorker((MessageType)meta.type, meta.id);
             auto          worker          = worker_weak_ptr.lock();
+            rpc_listen_fun rpc_func;
+            {
+                std::lock_guard<std::mutex> lock(rpc_interface_mutex_);
+                auto                        func = rpc_interface_map_.find(meta.method);
+                if (func != rpc_interface_map_.end())
+                    rpc_func = func->second;
+            }
+            if (!rpc_func)
+                return;
             if (worker)
             {
-                worker->Post([this, session = session, buffer = buffer, meta = std::move(meta), meta_size, data_size]() mutable {
-                    uint64_t key  = meta.method;
-                    auto     func = rpc_interface_map_.find(key);
-                    if (func == rpc_interface_map_.end())
-                        return;
-                    func->second(session, buffer, meta, meta_size, data_size);
+                worker->Post([session = session, buffer = buffer, meta = meta, meta_size, data_size, rpc_func = std::move(rpc_func)]() mutable {
+                    rpc_func(session, buffer, meta, meta_size, data_size);
                 });
             }
             else
             {
-
-				uint64_t key  = meta.method;
-				auto     func = rpc_interface_map_.find(key);
-				if (func == rpc_interface_map_.end())
-					return;
-				func->second(session, buffer, meta, meta_size, data_size);
+				rpc_func(session, buffer, meta, meta_size, data_size);
             }
 
             break;
         }
         case MsgMode::Response:
         {
-            SequenceId Id;
-            Id.value    = meta.sequence;
-            auto worker = WorkerManager::Instance()->GetWorker(Id.index);
-            if (worker)
             {
-                worker->Post([this, worker, session = session, buffer = buffer, meta = std::move(meta), meta_size, data_size]() mutable {
-                    uint64_t seq    = meta.sequence;
-                    auto     it     = rpc_caller_map_.find(seq);
-                    if (it == rpc_caller_map_.end())
-                        return;
-                    if (it->second)
-                        it->second->Done(session, buffer, meta, meta_size, data_size);
-                    rpc_caller_map_.erase(it);
-                });
-            }
-            else
-            {
-
-				uint64_t seq    = meta.sequence;
-				auto     it     = rpc_caller_map_.find(seq);
-				if (it == rpc_caller_map_.end())
-					return;
-				if (it->second)
-					it->second->Done(session, buffer, meta, meta_size, data_size);
-				rpc_caller_map_.erase(it);
+                RpcCallPtr call;
+                {
+                    std::lock_guard<std::mutex> lock(rpc_caller_mutex_);
+                    auto                        it = rpc_caller_map_.find(meta.sequence);
+                    if (it != rpc_caller_map_.end())
+                    {
+                        call = it->second;
+                        rpc_caller_map_.erase(it);
+                    }
+                }
+                if (call)
+                    call->Done(session, buffer, meta, meta_size, data_size);
             }
             break;
         }
         default:
             break;
     }
-
-
-//
-//    switch (meta.mode)
-//    {
-//        case MsgMode::Msg:
-//        {
-//            auto worker = WorkerManager::Instance()->GetWorker(meta.id % WorkerManager::Instance()->Size());
-//            if (worker)
-//            {
-//                worker->Post([this, session = session, buffer = buffer, meta = std::move(meta), meta_size, data_size]() mutable {
-//                    uint64_t key = (((uint64_t)meta.type) << 32) + (int)meta.id;
-//                    auto     fun = listen_function_map_.find(key);
-//                    if (fun != listen_function_map_.end())
-//                        fun->second(session, buffer, meta, meta_size, data_size);
-//                });
-//            }
-//#if USE_MAIN_THREAD
-//            else
-//            {
-//                uint64_t key = (((uint64_t)meta.type()) << 32) + (int)meta.id();
-//                auto     fun = listen_function_map_.find(key);
-//                if (fun != listen_function_map_.end())
-//                    fun->second(session, buffer, meta, meta_size, data_size);
-//            }
-//#endif
-//            break;
-//        }
-//        case MsgMode::Request:
-//        {
-//            auto worker = WorkerManager::Instance()->GetWorker(meta.id % WorkerManager::Instance()->Size());
-//            if (worker)
-//            {
-//                worker->Post([this, session = session, buffer = buffer, meta = std::move(meta), meta_size, data_size]() mutable {
-//                    uint64_t key  = meta.method;
-//                    auto     func = rpc_interface_map_.find(key);
-//                    if (func == rpc_interface_map_.end())
-//                        return;
-//                    func->second(session, buffer, meta, meta_size, data_size);
-//                });
-//            }
-//#if USE_MAIN_THREAD
-//            else
-//            {
-//                int64_t key = meta.method();
-//                auto    fun = rpc_interface_map_.find(key);
-//                if (fun != rpc_interface_map_.end())
-//                    fun->second(session, buffer, meta, meta_size, data_size);
-//            }
-//#endif
-//            break;
-//        }
-//        case MsgMode::Response:
-//        {
-//            SequenceId Id;
-//            Id.value    = meta.sequence;
-//            auto worker = WorkerManager::Instance()->GetWorker(Id.index);
-//            if (worker)
-//            {
-//                worker->Post([this, worker, session = session, buffer = buffer, meta = std::move(meta), meta_size, data_size]() mutable {
-//                    uint32_t thread = worker->GetWorkerId();
-//                    uint64_t seq    = meta.sequence;
-//                    auto     it     = rpc_caller_map_.find(seq);
-//                    if (it == rpc_caller_map_.end())
-//                        return;
-//                    if (it->second)
-//                        it->second->Done(session, buffer, meta, meta_size, data_size);
-//                    rpc_caller_map_.erase(it);
-//                });
-//            }
-//#if USE_MAIN_THREAD
-//            else
-//            {
-//                std::thread::id id        = std::this_thread::get_id();
-//                uint32_t        thread_id = *((uint32_t*)&id);
-//                SequenceId      sequence;
-//                sequence.value = meta.sequence();
-//                auto it        = rpc_caller_map_.find(sequence.value);
-//                if (it == rpc_caller_map_.end())
-//                    return;
-//                if (it->second)
-//                    it->second->Done(session, buffer, meta, meta_size, data_size);
-//                rpc_caller_map_.erase(it);
-//            }
-//#endif
-//            break;
-//        }
-//        default:
-//            break;
-//    }
 }
 
 void NetworkManager::OnReceiveCall(const SessionPtr& session, const ReadBufferPtr& buffer, int meta_size, int64_t data_size)

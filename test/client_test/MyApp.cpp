@@ -124,7 +124,6 @@ int MyApp::OnStartup()
     {
         if (worker)
         {
-            worker->InitDriving(&tick_id_,&cvMutex_,&cv_);
 			worker->Post([worker]() {worker->OnStartup();});
         }
     }

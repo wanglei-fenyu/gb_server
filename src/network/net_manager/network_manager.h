@@ -16,6 +16,8 @@
 #include "network/md5.hpp"
 #include "common/singleton.h"
 #include "network/router/router.h"
+#include <atomic>
+#include <mutex>
 
 NAMESPACE_BEGIN(gb)
 
@@ -118,6 +120,13 @@ public:
 
 private:
 	Router router_;
+    ListenMap listen_function_map_{};
+    RpcInterfaceMap rpc_interface_map_{};
+    RpcCallerMap rpc_caller_map_{};
+    std::mutex listen_mutex_;
+    std::mutex rpc_interface_mutex_;
+    std::mutex rpc_caller_mutex_;
+    std::atomic<uint64_t> sequence_tail_{1};
 
 };
 
@@ -190,6 +199,7 @@ struct CoRpc
                 co_return co_await RpcCallAwaiter<void>{[&](std::coroutine_handle<> h) {
                     call->SetCallBack([&, h]() { h.resume(); });
                     call->SetTimeout([&, h]() { h.resume(); });
+                    call->SetCancel([&, h]() { h.resume(); });
                     gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
                 }};
             }
@@ -201,6 +211,7 @@ struct CoRpc
                         h.resume();
                     });
                     call->SetTimeout([&, h]() { h.resume(); });
+                    call->SetCancel([&, h]() { h.resume(); });
                     gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
                 }};
             }
@@ -213,6 +224,7 @@ struct CoRpc
                     h.resume();
                 });
                 call->SetTimeout([&, h]() { h.resume(); });
+                call->SetCancel([&, h]() { h.resume(); });
                 gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
             }};
         }

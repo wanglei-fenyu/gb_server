@@ -30,9 +30,4 @@ private:
     std::atomic<bool> runding_;
     std::chrono::milliseconds frame_duration_;
 
-protected:
-    std::atomic<uint64_t>     tick_id_;
-    std::mutex                cvMutex_;
-    std::condition_variable   cv_;
-    ;
 };

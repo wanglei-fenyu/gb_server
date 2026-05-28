@@ -7,6 +7,9 @@
 #include <gbnet/common/define.h>
 #include "concurrentqueue.h"
 #include "../timer/timer_manager.h"
+#include <atomic>
+#include <condition_variable>
+#include <mutex>
 
 #include "worker_logic_interface.h"
 namespace gb
@@ -20,7 +23,6 @@ public:
 	virtual ~Worker();
 public:
     void Init(uint32_t id, size_t index);
-    void InitDriving(std::atomic<uint64_t>* global_tick_id, std::mutex* global_tick_mutex, std::condition_variable* global_tick_cv);
     void SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic);
     void OnStart();
 	void Run();
@@ -52,11 +54,8 @@ private:
 	moodycamel::ConcurrentQueue<std::function<void(void)>> events_;
     std::unique_ptr<TimerManager>   timer_manager_;
 	std::atomic<bool> runing_ = false;
-    uint64_t local_tick_id_ = 0;
-
-    std::atomic<uint64_t>* tick_id_ = nullptr;
-    std::mutex* cvMutex = nullptr;
-	std::condition_variable* cv = nullptr;
+    std::mutex event_mutex_;
+    std::condition_variable event_cv_;
 
     std::shared_ptr<IWorkerLogic> worker_logic_;
 };
