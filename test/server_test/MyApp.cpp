@@ -17,7 +17,7 @@
 
     if (result.count("type"))
     {
-        // ·½·¨1£ºÏÈ×ªÎª×Ö·û´®ÔÙ×ªÕûÊý
+        // ï¿½ï¿½ï¿½ï¿½1ï¿½ï¿½ï¿½ï¿½×ªÎªï¿½Ö·ï¿½ï¿½ï¿½ï¿½ï¿½×ªï¿½ï¿½ï¿½ï¿½
         std::string typeStr   = result["type"].as<std::string>();
         int         typeValue = std::stoi(typeStr);
         appType_              = (APP_TYPE)typeValue;
@@ -72,7 +72,6 @@ int MyApp::OnStartup()
     {
         if (worker)
         {
-            worker->InitDriving(&tick_id_, &cvMutex_, &cv_);
 			worker->OnStartup();
         }
     }
