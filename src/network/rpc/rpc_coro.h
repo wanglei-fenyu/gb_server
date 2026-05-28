@@ -4,6 +4,7 @@
 #include <coroutine>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <type_traits>
@@ -15,52 +16,87 @@ namespace detail
 {
 
 template <typename T>
-class RpcResumeState
+class RpcAwaitState
 {
 public:
-    RpcResumeState(std::coroutine_handle<> handle, T& result) :
-        handle_(handle), result_(result)
+    void Bind(std::coroutine_handle<> handle)
     {
+        handle_ = handle;
     }
 
     void Complete(T value)
     {
-        result_ = std::move(value);
-        Resume();
+        result_.emplace(std::move(value));
+        NotifyCompleted();
     }
 
     void Resume()
     {
-        if (resumed_.exchange(true, std::memory_order_acq_rel))
-            return;
-        handle_.resume();
+        NotifyCompleted();
+    }
+
+    bool FinishSuspend()
+    {
+        suspend_finished_.store(true, std::memory_order_release);
+        return completed_.load(std::memory_order_acquire);
+    }
+
+    T TakeResult()
+    {
+        if (result_)
+            return std::move(*result_);
+        return {};
     }
 
 private:
-    std::coroutine_handle<> handle_;
-    T&                      result_;
-    std::atomic<bool>       resumed_{false};
+    void NotifyCompleted()
+    {
+        if (completed_.exchange(true, std::memory_order_acq_rel))
+            return;
+        if (suspend_finished_.load(std::memory_order_acquire))
+            handle_.resume();
+    }
+
+private:
+    std::optional<T>       result_{};
+    std::coroutine_handle<> handle_{};
+    std::atomic<bool>       suspend_finished_{false};
+    std::atomic<bool>       completed_{false};
 };
 
 template <>
-class RpcResumeState<void>
+class RpcAwaitState<void>
 {
 public:
-    explicit RpcResumeState(std::coroutine_handle<> handle) :
-        handle_(handle)
+    void Bind(std::coroutine_handle<> handle)
     {
+        handle_ = handle;
     }
 
     void Resume()
     {
-        if (resumed_.exchange(true, std::memory_order_acq_rel))
-            return;
-        handle_.resume();
+        NotifyCompleted();
+    }
+
+    bool FinishSuspend()
+    {
+        suspend_finished_.store(true, std::memory_order_release);
+        return completed_.load(std::memory_order_acquire);
     }
 
 private:
-    std::coroutine_handle<> handle_;
-    std::atomic<bool>       resumed_{false};
+    void NotifyCompleted()
+    {
+        if (completed_.exchange(true, std::memory_order_acq_rel))
+            return;
+        if (suspend_finished_.load(std::memory_order_acquire))
+            handle_.resume();
+    }
+
+private:
+    std::coroutine_handle<> handle_{};
+    std::atomic<bool>       suspend_finished_{false};
+    std::atomic<bool>       completed_{false};
 };
 
 template <typename Tuple>
@@ -79,53 +115,60 @@ template <typename T>
 struct RpcCallAwaiter
 {
 public:
-    using binder_type = std::function<void(std::coroutine_handle<>, T&)>;
+    using state_type  = detail::RpcAwaitState<T>;
+    using binder_type = std::function<void(const std::shared_ptr<state_type>&)>;
 
 public:
     explicit RpcCallAwaiter(binder_type binder) :
-        binder_(std::move(binder))
+        state_(std::make_shared<state_type>()), binder_(std::move(binder))
     {
     }
 
 public:
     bool await_ready() noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> handle)
+    bool await_suspend(std::coroutine_handle<> handle)
     {
-        binder_(handle, result_);
+        state_->Bind(handle);
+        binder_(state_);
+        return !state_->FinishSuspend();
     }
 
-    T await_resume() { return std::move(result_); }
+    T await_resume() { return state_->TakeResult(); }
 
 private:
-    T           result_{};
-    binder_type binder_;
+    std::shared_ptr<state_type> state_;
+    binder_type                 binder_;
 };
 
 template <>
 struct RpcCallAwaiter<void>
 {
 public:
-    using binder_type = std::function<void(std::coroutine_handle<>)>;
+    using state_type  = detail::RpcAwaitState<void>;
+    using binder_type = std::function<void(const std::shared_ptr<state_type>&)>;
 
 public:
     explicit RpcCallAwaiter(binder_type binder) :
-        binder_(std::move(binder))
+        state_(std::make_shared<state_type>()), binder_(std::move(binder))
     {
     }
 
 public:
     bool await_ready() noexcept { return false; }
 
-    void await_suspend(std::coroutine_handle<> handle)
+    bool await_suspend(std::coroutine_handle<> handle)
     {
-        binder_(handle);
+        state_->Bind(handle);
+        binder_(state_);
+        return !state_->FinishSuspend();
     }
 
     void await_resume() { return; }
 
 private:
-    binder_type binder_;
+    std::shared_ptr<state_type> state_;
+    binder_type                 binder_;
 };
 
 template <typename T1 = void, typename... Rets>
@@ -141,34 +184,31 @@ struct CoRpc
         {
             if constexpr (std::is_void_v<ResultType>)
             {
-                co_return co_await RpcCallAwaiter<void>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](std::coroutine_handle<> handle) mutable {
-                    auto resume_state = std::make_shared<detail::RpcResumeState<void>>(handle);
-                    call->SetCallBack([resume_state]() { resume_state->Resume(); });
-                    call->SetTimeout([resume_state]() { resume_state->Resume(); });
-                    call->SetCancel([resume_state]() { resume_state->Resume(); });
+                co_return co_await RpcCallAwaiter<void>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](const std::shared_ptr<detail::RpcAwaitState<void>>& state) mutable {
+                    call->SetCallBack([state]() { state->Resume(); });
+                    call->SetTimeout([state]() { state->Resume(); });
+                    call->SetCancel([state]() { state->Resume(); });
                     detail::InvokeRpcCall(call, method, std::move(args_tuple));
                 }};
             }
             else
             {
-                co_return co_await RpcCallAwaiter<ResultType>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](std::coroutine_handle<> handle, ResultType& result) mutable {
-                    auto resume_state = std::make_shared<detail::RpcResumeState<ResultType>>(handle, result);
-                    call->SetCallBack([resume_state](ResultType value) { resume_state->Complete(std::move(value)); });
-                    call->SetTimeout([resume_state]() { resume_state->Resume(); });
-                    call->SetCancel([resume_state]() { resume_state->Resume(); });
+                co_return co_await RpcCallAwaiter<ResultType>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](const std::shared_ptr<detail::RpcAwaitState<ResultType>>& state) mutable {
+                    call->SetCallBack([state](ResultType value) { state->Complete(std::move(value)); });
+                    call->SetTimeout([state]() { state->Resume(); });
+                    call->SetCancel([state]() { state->Resume(); });
                     detail::InvokeRpcCall(call, method, std::move(args_tuple));
                 }};
             }
         }
         else
         {
-            co_return co_await RpcCallAwaiter<ResultType>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](std::coroutine_handle<> handle, ResultType& result) mutable {
-                auto resume_state = std::make_shared<detail::RpcResumeState<ResultType>>(handle, result);
-                call->SetCallBack([resume_state](T1 value, Rets... rest) {
-                    resume_state->Complete(std::make_tuple(std::move(value), std::move(rest)...));
+            co_return co_await RpcCallAwaiter<ResultType>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](const std::shared_ptr<detail::RpcAwaitState<ResultType>>& state) mutable {
+                call->SetCallBack([state](T1 value, Rets... rest) {
+                    state->Complete(std::make_tuple(std::move(value), std::move(rest)...));
                 });
-                call->SetTimeout([resume_state]() { resume_state->Resume(); });
-                call->SetCancel([resume_state]() { resume_state->Resume(); });
+                call->SetTimeout([state]() { state->Resume(); });
+                call->SetCancel([state]() { state->Resume(); });
                 detail::InvokeRpcCall(call, method, std::move(args_tuple));
             }};
         }

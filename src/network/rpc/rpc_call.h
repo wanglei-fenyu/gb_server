@@ -99,7 +99,8 @@ inline void RpcCall::SetCallBack(F f)
     {
         func = RpcFunctionaTraits<F>::make(f);
     }
-    done_call_bcak_ = func;
+    std::lock_guard<std::mutex> lock(callback_mutex_);
+    done_call_bcak_ = std::move(func);
 }
 
 
