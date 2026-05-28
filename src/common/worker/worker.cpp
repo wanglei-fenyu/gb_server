@@ -2,6 +2,7 @@
 #include "log/log_help.h"
 #include "../../script/register_script.h"
 #include "../res_path.h"
+#include "network/scheduler/executor.h"
 
 namespace gb
 {
@@ -21,6 +22,7 @@ void Worker::Init(uint32_t id, size_t index)
 {
     thread_id_ = id;
     index_     = index;
+    executor_  = std::make_shared<Executor>(weak_from_this(), false);
 }
 
 void Worker::SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic)
@@ -136,6 +138,11 @@ uint32_t Worker::GetIndex()
 std::unique_ptr<TimerManager>& Worker::GetTimerManager()
 {
     return timer_manager_;
+}
+
+std::shared_ptr<Executor> Worker::GetExecutor() const
+{
+    return executor_;
 }
 
 void Worker::InitLua()

@@ -138,7 +138,7 @@ void NetworkManager::UnRegister(std::string method)
 
 Executor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t route_id) const
 {
-    return Executor::Worker(router_.GetServiceWorker((MessageType)type, route_id));
+    return router_.GetServiceExecutor((MessageType)type, route_id);
 }
 
 net_listen_fun NetworkManager::FindListenFunction(uint32_t type)

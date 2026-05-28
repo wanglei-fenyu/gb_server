@@ -1,5 +1,6 @@
 #include "app.h"
 #include "log/log_help.h"
+#include "common/worker/worker_manager.h"
 
 void App::SetFrameRate(int fps)
 {
@@ -40,6 +41,8 @@ void App::Run()
         {
             break;
         }
+
+        gb::WorkerManager::Instance()->DrainMainQueue();
 
 	    if (OnTick() != 0)
 	    {

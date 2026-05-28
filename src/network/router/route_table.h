@@ -1,7 +1,10 @@
 #pragma once
 #include "message_type.h"
-#include "log/log_help.h"
 #include "common/worker/worker.h"
+#include <array>
+#include <functional>
+#include <mutex>
+#include <vector>
 namespace gb
 {
 
@@ -22,36 +25,49 @@ namespace gb
 	{
         void RegisterWorker(ServiceWorkerType service_worker_type, WorkerWeakPtr worker)
 		{
-			if (service_worker_type < 0 || service_worker_type >= workers_.size())
+			if (service_worker_type >= workers_.size())
 			{
 				return;
 			}
-
+            std::lock_guard<std::mutex> lock(mutex_);
 			workers_[service_worker_type].push_back(worker);
         }
 
 
-		std::vector<WorkerWeakPtr>& GetWorker(ServiceWorkerType service_worker_type)
+		void SetServiceTypeResolver(std::function<ServiceWorkerType(MessageType)> resolver)
 		{
-		
-			static std::vector<WorkerWeakPtr> null;
-			if (service_worker_type < 0 || service_worker_type >= workers_.size())
-			{
-				return null;
-			}
+            std::lock_guard<std::mutex> lock(mutex_);
+            service_type_resolver_ = std::move(resolver);
+		}
 
+		std::vector<WorkerWeakPtr> GetWorker(ServiceWorkerType service_worker_type) const
+		{
+			if (service_worker_type >= workers_.size())
+			{
+				return {};
+			}
+            std::lock_guard<std::mutex> lock(mutex_);
 			return workers_[service_worker_type];
 			
 		}
 
-		std::vector<WorkerWeakPtr>& GetWorkerByMessageType(MessageType message_type)
+		ServiceWorkerType ResolveServiceWorkerType(MessageType message_type) const
 		{
+            std::function<ServiceWorkerType(MessageType)> resolver;
+            {
+                std::lock_guard<std::mutex> lock(mutex_);
+                resolver = service_type_resolver_;
+            }
+            if (resolver)
+                return resolver(message_type);
 			int service_worker_type = message_type % MIR_Range;
-			return GetWorker((ServiceWorkerType)service_worker_type);
+			return (ServiceWorkerType)service_worker_type;
 		}
 	
 
 private:
+        mutable std::mutex                               mutex_;
+        std::function<ServiceWorkerType(MessageType)>    service_type_resolver_;
         std::array<std::vector<WorkerWeakPtr>, SWT_Count> workers_;
 
 };
