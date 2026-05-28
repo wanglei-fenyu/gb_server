@@ -23,7 +23,7 @@ void Worker::Init(uint32_t id, size_t index)
     thread_id_ = id;
     index_     = index;
     executor_  = std::make_shared<Executor>(weak_from_this(), false);
-    async_executor_ = std::make_shared<GbAsyncExecutor>(executor_.get());
+    async_executor_ = std::make_shared<GbAsyncExecutor>(executor_);
 }
 
 void Worker::SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic)

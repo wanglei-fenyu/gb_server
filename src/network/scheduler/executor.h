@@ -2,6 +2,7 @@
 #include "common/worker/worker_manager.h"
 #include "async_simple/Executor.h"
 #include <functional>
+#include <memory>
 #include <utility>
 
 namespace gb
@@ -12,8 +13,8 @@ class Executor;
 class GbAsyncExecutor : public async_simple::Executor
 {
 public:
-    explicit GbAsyncExecutor(Executor* owner) :
-        async_simple::Executor("gb_executor"), owner_(owner)
+    explicit GbAsyncExecutor(const std::shared_ptr<Executor>& owner) :
+        async_simple::Executor("gb_executor"), executor_(owner)
     {
     }
 
@@ -23,7 +24,7 @@ public:
     IOExecutor*  getIOExecutor() override { return nullptr; }
 
 private:
-    Executor* owner_{nullptr};
+    std::weak_ptr<Executor> executor_{};
 };
 
 class Executor
@@ -137,12 +138,14 @@ private:
 
 inline bool GbAsyncExecutor::schedule(Func func)
 {
-    return owner_ ? owner_->Dispatch(std::move(func)) : false;
+    auto executor = executor_.lock();
+    return executor ? executor->Dispatch(std::move(func)) : false;
 }
 
 inline bool GbAsyncExecutor::currentThreadInExecutor() const
 {
-    return owner_ ? owner_->IsCurrent() : false;
+    auto executor = executor_.lock();
+    return executor ? executor->IsCurrent() : false;
 }
 
 } // namespace gb
