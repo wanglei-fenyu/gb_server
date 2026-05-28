@@ -10,19 +10,19 @@ class Executor
 {
 public:
     Executor() = default;
-    explicit Executor(WorkerWeakPtr worker) :
-        worker_(std::move(worker))
+    Executor(WorkerWeakPtr worker, bool inline_fallback = true) :
+        worker_(std::move(worker)), inline_fallback_(inline_fallback)
     {
     }
 
-    static Executor Current()
+    static Executor Current(bool inline_fallback = true)
     {
-        return Executor(WorkerManager::Instance()->GetCurWorker());
+        return Executor(WorkerManager::Instance()->GetCurWorker(), inline_fallback);
     }
 
-    static Executor Worker(WorkerWeakPtr worker)
+    static Executor Worker(WorkerWeakPtr worker, bool inline_fallback = true)
     {
-        return Executor(std::move(worker));
+        return Executor(std::move(worker), inline_fallback);
     }
 
     bool HasWorker() const
@@ -34,7 +34,7 @@ public:
     {
         auto worker = worker_.lock();
         if (!worker)
-            return true;
+            return false;
         auto current = WorkerManager::Instance()->GetCurWorker();
         return current && current->GetIndex() == worker->GetIndex();
     }
@@ -45,7 +45,13 @@ public:
             return;
 
         auto worker = worker_.lock();
-        if (!worker || IsCurrent())
+        if (!worker)
+        {
+            if (inline_fallback_)
+                fn();
+            return;
+        }
+        if (IsCurrent())
         {
             fn();
             return;
@@ -55,6 +61,7 @@ public:
 
 private:
     WorkerWeakPtr worker_;
+    bool          inline_fallback_{true};
 };
 
 } // namespace gb

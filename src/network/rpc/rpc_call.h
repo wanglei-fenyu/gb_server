@@ -5,6 +5,7 @@
 #include "network/scheduler/executor.h"
 #include <atomic>
 #include <mutex>
+#include <type_traits>
 
 
 namespace gb
@@ -60,7 +61,7 @@ public:
 
 private:
     void StartTimer();
-    void Finish(RpcErrorCode error_code, std::function<void()> completion, bool remove_call);
+    void Finish(RpcErrorCode error_code, std::function<void()> completion, bool remove_call, bool already_finished = false);
     void StopTimer();
     void DispatchCompletion(std::function<void()> cb) const;
 
@@ -78,7 +79,7 @@ private:
     mutable std::mutex        callback_mutex_;
     std::shared_ptr<Session>  session_;        //网络会话
     rpc_done_call             done_call_bcak_; //回调函数
-    std::atomic<RpcErrorCode> error_code_;     //错误码
+    std::atomic<std::underlying_type_t<RpcErrorCode>> error_code_;     //错误码
 };
 
 template <class F>

@@ -63,6 +63,16 @@ private:
     std::atomic<bool>       resumed_{false};
 };
 
+template <typename Tuple>
+void InvokeRpcCall(const RpcCallPtr& call, const std::string& method, Tuple&& args)
+{
+    std::apply(
+        [&](auto&&... values) {
+            gb::NetworkManager::Instance()->Call(call, method, std::forward<decltype(values)>(values)...);
+        },
+        std::forward<Tuple>(args));
+}
+
 } // namespace detail
 
 template <typename T>
@@ -126,39 +136,40 @@ struct CoRpc
     template <typename... Args>
     static async_simple::coro::Lazy<ResultType> execute(RpcCallPtr call, std::string method, Args... args) noexcept
     {
+        auto args_tuple = std::make_tuple(std::forward<Args>(args)...);
         if constexpr (sizeof...(Rets) == 0)
         {
             if constexpr (std::is_void_v<ResultType>)
             {
-                co_return co_await RpcCallAwaiter<void>{[&](std::coroutine_handle<> handle) {
+                co_return co_await RpcCallAwaiter<void>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](std::coroutine_handle<> handle) mutable {
                     auto resume_state = std::make_shared<detail::RpcResumeState<void>>(handle);
                     call->SetCallBack([resume_state]() { resume_state->Resume(); });
                     call->SetTimeout([resume_state]() { resume_state->Resume(); });
                     call->SetCancel([resume_state]() { resume_state->Resume(); });
-                    gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
+                    detail::InvokeRpcCall(call, method, std::move(args_tuple));
                 }};
             }
             else
             {
-                co_return co_await RpcCallAwaiter<ResultType>{[&](std::coroutine_handle<> handle, ResultType& result) {
+                co_return co_await RpcCallAwaiter<ResultType>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](std::coroutine_handle<> handle, ResultType& result) mutable {
                     auto resume_state = std::make_shared<detail::RpcResumeState<ResultType>>(handle, result);
                     call->SetCallBack([resume_state](ResultType value) { resume_state->Complete(std::move(value)); });
                     call->SetTimeout([resume_state]() { resume_state->Resume(); });
                     call->SetCancel([resume_state]() { resume_state->Resume(); });
-                    gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
+                    detail::InvokeRpcCall(call, method, std::move(args_tuple));
                 }};
             }
         }
         else
         {
-            co_return co_await RpcCallAwaiter<ResultType>{[&](std::coroutine_handle<> handle, ResultType& result) {
+            co_return co_await RpcCallAwaiter<ResultType>{[call = std::move(call), method = std::move(method), args_tuple = std::move(args_tuple)](std::coroutine_handle<> handle, ResultType& result) mutable {
                 auto resume_state = std::make_shared<detail::RpcResumeState<ResultType>>(handle, result);
                 call->SetCallBack([resume_state](T1 value, Rets... rest) {
                     resume_state->Complete(std::make_tuple(std::move(value), std::move(rest)...));
                 });
                 call->SetTimeout([resume_state]() { resume_state->Resume(); });
                 call->SetCancel([resume_state]() { resume_state->Resume(); });
-                gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
+                detail::InvokeRpcCall(call, method, std::move(args_tuple));
             }};
         }
     }

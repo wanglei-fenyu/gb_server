@@ -118,7 +118,7 @@ public:
     Router& GetRouter() { return router_; }
 
 private:
-    Executor      ResolveExecutor(uint32_t type, uint64_t route_id) const;
+    Executor      CreateExecutorForRoute(uint32_t type, uint64_t route_id) const;
     net_listen_fun FindListenFunction(uint32_t type);
     rpc_listen_fun FindRpcFunction(uint64_t method);
 

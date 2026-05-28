@@ -136,7 +136,7 @@ void NetworkManager::UnRegister(std::string method)
 	rpc_interface_map_.erase(key);
 }
 
-Executor NetworkManager::ResolveExecutor(uint32_t type, uint64_t route_id) const
+Executor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t route_id) const
 {
     return Executor::Worker(router_.GetServiceWorker((MessageType)type, route_id));
 }
@@ -165,7 +165,7 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
     {
         case MsgMode::Msg:
         {
-            auto          executor    = ResolveExecutor(meta.type, meta.id);
+            auto          executor    = CreateExecutorForRoute(meta.type, meta.id);
             net_listen_fun listen_func = FindListenFunction(meta.type);
             if (!listen_func)
                 return;
@@ -176,7 +176,7 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         }
         case MsgMode::Request:
         {
-            auto          executor = ResolveExecutor(meta.type, meta.id);
+            auto          executor = CreateExecutorForRoute(meta.type, meta.id);
             rpc_listen_fun rpc_func = FindRpcFunction(meta.method);
             if (!rpc_func)
                 return;
