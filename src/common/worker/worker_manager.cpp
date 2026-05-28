@@ -31,17 +31,16 @@ namespace gb
  {
 	 WorkerPtr       work      = std::make_shared<Worker>();
 	 work->SetWorkerLogic(worker_logic);
-     worker_threads.emplace_back([this,work]() {
+     size_t index = 0;
+     {
+         std::lock_guard<std::mutex> lock(mutex_);
+         index = workers.size();
+         workers.push_back(work);
+     }
+     worker_threads.emplace_back([work, index]() {
          std::thread::id id        = std::this_thread::get_id();
          uint32_t        thread_id = *((uint32_t*)&id);
-         workers.push_back(work);
-         work->Init(thread_id, workers.size()-1);
-         {
-             std::lock_guard<std::mutex> lock(mutex_);
-             workers.push_back(work);
-         }
-
-
+         work->Init(thread_id, index);
 		work->OnStart();
 		work->Run();
      });
@@ -55,14 +54,8 @@ size_t WorkerManager::Size()
 
 gb::WorkerPtr WorkerManager::GetWorker(size_t index) const
 {
-     auto it = std::find_if(workers.begin(), workers.end(), [index](const WorkerPtr& work) {
-         return work->GetIndex() == index;
-     });
-     if (it != workers.end())
-     {
-         return *it;
-
-     }
+     if (index < workers.size())
+         return workers[index];
 	return nullptr;
 
 }

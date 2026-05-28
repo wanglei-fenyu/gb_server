@@ -23,14 +23,6 @@ void Worker::Init(uint32_t id, size_t index)
     index_     = index;
 }
 
-void Worker::InitDriving(std::atomic<uint64_t>* global_tick_id, std::mutex* global_tick_mutex, std::condition_variable* global_tick_cv)
-{
-    tick_id_ = global_tick_id;
-    cvMutex  = global_tick_mutex;
-    cv       = global_tick_cv;
-    local_tick_id_ = *tick_id_;
-}
-
 void Worker::SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic)
 {
     worker_logic_ = worker_logic;
@@ -52,28 +44,23 @@ void Worker::Run()
     auto last_time = std::chrono::steady_clock::now();
     while (runing_)
     {
-        if (!tick_id_ || !cv || !cvMutex)
-        {
-            continue;
-        }
-        std::unique_lock<std::mutex> lk(*cvMutex);
-        cv->wait(lk);
+        std::unique_lock<std::mutex> lk(event_mutex_);
+        event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() { return !runing_.load() || events_.size_approx() > 0; });
+        lk.unlock();
+        if (!runing_)
+            break;
 		auto                         current_time = std::chrono::steady_clock::now();
 		std::chrono::duration<float> elapsed      = current_time - last_time;
 		last_time                                 = current_time;
         OnUpdate(elapsed.count());
-		uint64_t g_tick_id = tick_id_->load(std::memory_order_acquire);
-        while(local_tick_id_ < g_tick_id)
-        {
-            OnTick();
-            ++local_tick_id_;
-        }
+        OnTick();
     }
 }
 
 void Worker::Stop()
 {
      runing_.store(false);
+     event_cv_.notify_all();
 
 }
 
@@ -119,13 +106,19 @@ int Worker::OnCleanup()
 void Worker::Post(const std::function<void(void)>& handler)
 {
     if (runing_.load())
+    {
 		events_.enqueue(handler);
+        event_cv_.notify_one();
+    }
 }
 
 void Worker::Post(std::function<void(void)>&& handler)
 {
     if (runing_.load())
+    {
 		events_.enqueue(std::move(handler));
+        event_cv_.notify_one();
+    }
 }
 
 uint32_t Worker::GetWorkerId()

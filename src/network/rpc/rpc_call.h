@@ -2,10 +2,13 @@
 #include "network/session/session.h"
 #include "rpc_function.hpp"
 #include "network/network_function.hpp"
+#include <atomic>
+#include <mutex>
 
 
 namespace gb
 {
+class Worker;
 
 constexpr int64_t kRpcdefaultTimeout = 1000 * 5; //5秒
 
@@ -38,15 +41,17 @@ public:
     void                      SetId(uint64_t id) { id_ = id; }
     uint64_t                  GetId() { return id_; }
     void                      SetTimeout(std::function<void()> timeout_fun, int64_t timeout = kRpcdefaultTimeout);
+    void                      SetCancel(std::function<void()> cancel_fun);
     void                      SetTimeout(int64_t timeout);
     void                      SetSession(const std::shared_ptr<Session>& session);
+    void                      BindCurrentWorker();
     std::shared_ptr<Session>& GetSession() { return session_; }
     void                      Call(Meta& meta,const ReadBufferPtr buffer = nullptr);
     //void                      Call(Meta& meta, std::vector<uint8_t>& data);
     void                      Cancel();
     bool                      HasCallBack() const;
     bool                      HasSession();
-    void                      Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta& meta, int meta_size, int64_t data_size) const;
+    void                      Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta& meta, int meta_size, int64_t data_size);
     bool                      IsError();
     RpcErrorCode              ErrorCode();
     template <class F>
@@ -54,6 +59,7 @@ public:
 
 private:
     void StartTimer();
+    void DispatchCompletion(std::function<void()> cb) const;
 
 private:
     uint64_t                  id_;             //唯一标识
@@ -62,7 +68,11 @@ private:
     mutable std::optional<Asio::steady_timer> timer_;
     std::chrono::steady_clock::duration timeout_;       //使用毫秒
     std::function<void()>     timeout_func_;   //超时回调
-    bool                      is_cancel_;      //是否已经取消
+    std::function<void()>     cancel_func_;
+    std::atomic<bool>         is_cancel_;      //是否已经取消
+    std::atomic<bool>         finished_;
+    std::weak_ptr<Worker>     callback_worker_;
+    mutable std::mutex        callback_mutex_;
     std::shared_ptr<Session>  session_;        //网络会话
     rpc_done_call             done_call_bcak_; //回调函数
     RpcErrorCode              error_code_;     //错误码

@@ -14,7 +14,6 @@ int App::Init()
 {
     if (OnInit() != 0) return -1;
     runding_ = true;
-    tick_id_ = 0;
     return 0;
 }
 
@@ -37,8 +36,6 @@ void App::Run()
         auto                         current_time = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsed      = current_time - last_time;
         last_time                                 = current_time;
-        tick_id_.fetch_add(1, std::memory_order_release);
-        cv_.notify_all();
         if (OnUpdate(elapsed.count()) != 0)
         {
             break;
