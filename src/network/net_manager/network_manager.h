@@ -8,12 +8,11 @@
 #include "network/rpc/rpc_reply.h"
 #include "network/rpc/rpc_function.hpp"
 #include "network/message_meta.h"
-#include "async_simple/coro/Lazy.h"
-#include "async_simple/coro/SyncAwait.h"
 #include "network/io_service_pool/io_service_pool.h"
 #include "network/net/server.h"
 #include "gbnet/buffer/buffer.h"
 #include "network/md5.hpp"
+#include "network/scheduler/executor.h"
 #include "common/singleton.h"
 #include "network/router/router.h"
 #include <atomic>
@@ -119,6 +118,11 @@ public:
     Router& GetRouter() { return router_; }
 
 private:
+    Executor      CreateExecutorForRoute(uint32_t type, uint64_t route_id) const;
+    net_listen_fun FindListenFunction(uint32_t type);
+    rpc_listen_fun FindRpcFunction(uint64_t method);
+
+private:
 	Router router_;
     ListenMap listen_function_map_{};
     RpcInterfaceMap rpc_interface_map_{};
@@ -130,105 +134,6 @@ private:
 
 };
 
-template <typename T>
-struct RpcCallAwaiter
-{
-public:
-    using private_call = std::function<void(std::coroutine_handle<>, T&)>;
-
-public:
-    RpcCallAwaiter(private_call call_back) :
-        private_call_(std::move(call_back))
-    {
-    }
-
-public:
-    bool await_ready() noexcept { return false; }
-
-    void await_suspend(std::coroutine_handle<> handle)
-    {
-        private_call_(handle, resoult_);
-    }
-
-    T await_resume() { return std::move(resoult_); }
-
-private:
-    T            resoult_;
-    private_call private_call_;
-};
-
-template <>
-struct RpcCallAwaiter<void>
-{
-public:
-    using private_call = std::function<void(std::coroutine_handle<>)>;
-
-public:
-    RpcCallAwaiter(private_call call_back) :
-        private_call_(std::move(call_back))
-    {
-    }
-
-public:
-    bool await_ready() noexcept { return false; }
-
-    void await_suspend(std::coroutine_handle<> handle)
-    {
-        private_call_(handle);
-    }
-
-    void await_resume() { return; }
-
-private:
-    private_call private_call_;
-};
-
-
-
-template <typename T1 = void, typename... Rets>
-struct CoRpc
-{
-    using ResultType = std::conditional_t<sizeof...(Rets) == 0, T1, std::tuple<T1, Rets...>>;
-    template <typename... Args>
-    static async_simple::coro::Lazy<ResultType> execute(RpcCallPtr call, std::string method, Args... args) noexcept
-    {
-        if constexpr ((sizeof...(Rets) == 0))
-        {
-            if constexpr (std::is_void_v<ResultType>)
-            {
-                co_return co_await RpcCallAwaiter<void>{[&](std::coroutine_handle<> h) {
-                    call->SetCallBack([&, h]() { h.resume(); });
-                    call->SetTimeout([&, h]() { h.resume(); });
-                    call->SetCancel([&, h]() { h.resume(); });
-                    gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
-                }};
-            }
-            else
-            {
-                co_return co_await RpcCallAwaiter<ResultType>{[&](std::coroutine_handle<> h, ResultType& result) {
-                    call->SetCallBack([&, h](ResultType r) {
-                        result = std::move(r);
-                        h.resume();
-                    });
-                    call->SetTimeout([&, h]() { h.resume(); });
-                    call->SetCancel([&, h]() { h.resume(); });
-                    gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
-                }};
-            }
-        }
-        else
-        {
-            co_return co_await RpcCallAwaiter<ResultType>{[&](std::coroutine_handle<> h, ResultType& result) {
-                call->SetCallBack([&, h](T1 t, Rets... r) {
-                    result = std::make_tuple(std::move(t), std::move(r)...);
-                    h.resume();
-                });
-                call->SetTimeout([&, h]() { h.resume(); });
-                call->SetCancel([&, h]() { h.resume(); });
-                gb::NetworkManager::Instance()->Call(call, method, std::forward<Args>(args)...);
-            }};
-        }
-    }
-};
-
 NAMESPACE_END
+
+#include "network/rpc/rpc_coro.h"
