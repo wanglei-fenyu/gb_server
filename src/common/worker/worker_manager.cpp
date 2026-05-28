@@ -13,6 +13,7 @@ thread_local WorkerPtr tl_current_worker;
 
  WorkerManager::WorkerManager()
 {
+    main_thread_id_ = std::this_thread::get_id();
 }
 
  WorkerManager::~WorkerManager()
@@ -72,6 +73,73 @@ std::vector<std::thread>& WorkerManager::GetThreads()
 std::vector<WorkerPtr>& WorkerManager::GetWorkers()
 {
     return workers;
+}
+
+bool WorkerManager::PostToWorker(size_t index, const std::function<void()>& handler) const
+{
+    auto worker = GetWorker(index);
+    if (!worker || !handler)
+        return false;
+    worker->Post(handler);
+    return true;
+}
+
+bool WorkerManager::PostToWorker(size_t index, std::function<void()>&& handler) const
+{
+    auto worker = GetWorker(index);
+    if (!worker || !handler)
+        return false;
+    worker->Post(std::move(handler));
+    return true;
+}
+
+void WorkerManager::PostMain(const std::function<void()>& handler)
+{
+    if (!handler)
+        return;
+    main_events_.enqueue(handler);
+}
+
+void WorkerManager::PostMain(std::function<void()>&& handler)
+{
+    if (!handler)
+        return;
+    main_events_.enqueue(std::move(handler));
+}
+
+size_t WorkerManager::DrainMainQueue(size_t max_events)
+{
+    size_t               processed = 0;
+    std::function<void()> fn;
+    while (processed < max_events && main_events_.try_dequeue(fn))
+    {
+        if (fn)
+            fn();
+        ++processed;
+    }
+    return processed;
+}
+
+bool WorkerManager::IsMainThread() const
+{
+    return std::this_thread::get_id() == main_thread_id_;
+}
+
+void WorkerManager::BroadcastToWorkers(const std::function<void(const WorkerPtr&)>& dispatcher)
+{
+    if (!dispatcher)
+        return;
+    std::vector<WorkerPtr> workers_copy;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        workers_copy = workers;
+    }
+    for (auto& worker : workers_copy)
+    {
+        if (!worker)
+            continue;
+        worker->Post([dispatcher, worker]() { dispatcher(worker); });
+    }
 }
 
 }
