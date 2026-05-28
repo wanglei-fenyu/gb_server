@@ -135,14 +135,10 @@ public:
             dispatch_(std::move(fn));
             return true;
         }
-        if (!worker)
+        if (inline_fallback_)
         {
-            if (inline_fallback_)
-            {
-                fn();
-                return true;
-            }
-            return false;
+            fn();
+            return true;
         }
         return false;
     }

@@ -138,7 +138,12 @@ void WorkerManager::BroadcastToWorkers(const std::function<void(const WorkerPtr&
     {
         if (!worker)
             continue;
-        worker->Post([dispatcher, worker]() { dispatcher(worker); });
+        WorkerWeakPtr weak_worker = worker;
+        worker->Post([dispatcher, weak_worker]() {
+            auto target = weak_worker.lock();
+            if (target)
+                dispatcher(target);
+        });
     }
 }
 
