@@ -36,7 +36,7 @@ thread_local WorkerPtr tl_current_worker;
      }
      worker_threads.emplace_back([work, index]() {
          std::thread::id id        = std::this_thread::get_id();
-         uint32_t        thread_id = *((uint32_t*)&id);
+         uint32_t        thread_id = static_cast<uint32_t>(std::hash<std::thread::id>{}(id));
          work->Init(thread_id, index);
          tl_current_worker = work;
          work->OnStart();

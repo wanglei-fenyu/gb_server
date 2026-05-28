@@ -58,7 +58,7 @@ private:
         if (suspend_finished_.load(std::memory_order_acquire))
         {
             auto h = handle_;
-            executor_.Dispatch([h]() mutable { h.resume(); });
+            executor_.Dispatch([h]() { h.resume(); });
         }
     }
 
@@ -99,7 +99,7 @@ private:
         if (suspend_finished_.load(std::memory_order_acquire))
         {
             auto h = handle_;
-            executor_.Dispatch([h]() mutable { h.resume(); });
+            executor_.Dispatch([h]() { h.resume(); });
         }
     }
 
