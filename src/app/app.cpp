@@ -2,6 +2,9 @@
 #include "log/log_help.h"
 #include "common/worker/worker_manager.h"
 #include "common/signal/signal_handler.h"
+#include "common/shutdown/shutdown_manager.h"
+#include "network/io_service_pool/io_service_pool.h"
+#include <thread>
 
 void App::SetFrameRate(int fps)
 {
@@ -15,8 +18,22 @@ void App::SetFrameRate(int fps)
 int App::Init()
 {
     gb::WorkerManager::Instance()->InitMainWorker();
+    
+    // Initialize shutdown manager
+    shutdown_manager_ = std::make_shared<gb::ShutdownManager>();
+    shutdown_manager_->Initialize(
+        [this](gb::ShutdownManager::ShutdownPhase phase) { OnPhaseStoppingIO(phase); },
+        [this](gb::ShutdownManager::ShutdownPhase phase) { OnPhaseProcessingTasks(phase); },
+        [this](gb::ShutdownManager::ShutdownPhase phase) { OnPhaseCompletingTimers(phase); },
+        [this](gb::ShutdownManager::ShutdownPhase phase) { OnPhaseCleanup(phase); }
+    );
+    
     signal_handler_ = std::make_unique<gb::SignalHandler>();
-    if (!signal_handler_->Initialize([this](gb::SignalHandler::SignalType) { Stop(); }))
+    if (!signal_handler_->Initialize([this](gb::SignalHandler::SignalType) { 
+        Stop();
+        if (shutdown_manager_)
+            shutdown_manager_->Shutdown();
+    }))
         return -1;
     if (OnInit() != 0) return -1;
     runding_ = true;
@@ -26,6 +43,136 @@ int App::Init()
 void App::Stop()
 {
     runding_ = false;
+}
+
+void App::OnPhaseStoppingIO(gb::ShutdownManager::ShutdownPhase phase)
+{
+    LOG_INFO("=== Phase 1: Stopping IO threads ===");
+    // Stop IO service pool from accepting new messages
+    if (io_service_pool_)
+    {
+        io_service_pool_->GracefulStop();
+    }
+    LOG_INFO("IO threads stopped, proceeding to next phase");
+    // Move to next phase after brief delay
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    if (shutdown_manager_)
+        shutdown_manager_->NextPhase();
+}
+
+void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
+{
+    LOG_INFO("=== Phase 2: Processing pending tasks ===");
+    
+    // Enter shutdown mode for all workers
+    auto workers = gb::WorkerManager::Instance()->GetWorkers();
+    for (auto& worker : workers)
+    {
+        if (worker)
+            worker->EnterShutdownMode();
+    }
+    
+    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
+    if (main_worker)
+        main_worker->EnterShutdownMode();
+    
+    // Wait for pending tasks to be processed (max 5 seconds)
+    auto start_time = std::chrono::steady_clock::now();
+    bool all_empty = false;
+    
+    while (std::chrono::steady_clock::now() - start_time < std::chrono::seconds(5))
+    {
+        all_empty = true;
+        for (auto& worker : workers)
+        {
+            if (worker && worker->GetPendingTaskCount() > 0)
+            {
+                all_empty = false;
+                break;
+            }
+        }
+        
+        if (main_worker && main_worker->GetPendingTaskCount() > 0)
+            all_empty = false;
+        
+        if (all_empty)
+            break;
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    
+    if (all_empty)
+        LOG_INFO("All pending tasks processed");
+    else
+        LOG_WARN("Task processing timeout, moving to next phase");
+    
+    if (shutdown_manager_)
+        shutdown_manager_->NextPhase();
+}
+
+void App::OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase)
+{
+    LOG_INFO("=== Phase 3: Completing current timer frame ===");
+    
+    // Enter shutdown mode for all timer managers (cancel future timers, complete current frame)
+    auto workers = gb::WorkerManager::Instance()->GetWorkers();
+    for (auto& worker : workers)
+    {
+        if (worker && worker->GetTimerManager())
+        {
+            worker->GetTimerManager()->EnterShutdownMode();
+        }
+    }
+    
+    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
+    if (main_worker && main_worker->GetTimerManager())
+    {
+        main_worker->GetTimerManager()->EnterShutdownMode();
+    }
+    
+    // Execute one more frame to complete current timers
+    LOG_INFO("Executing final timer frame");
+    auto last_time = std::chrono::steady_clock::now();
+    auto current_time = std::chrono::steady_clock::now();
+    std::chrono::duration<float> elapsed = current_time - last_time;
+    
+    if (main_worker)
+    {
+        main_worker->ProcessFrame(elapsed.count());
+    }
+    
+    LOG_INFO("Current timer frame completed");
+    
+    if (shutdown_manager_)
+        shutdown_manager_->NextPhase();
+}
+
+void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
+{
+    LOG_INFO("=== Phase 4: Cleaning up resources ===");
+    
+    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
+    if (!main_worker)
+        return;
+
+    // Call application cleanup
+    if (0 != OnCleanup())
+    {
+        LOG_ERROR("OnCleanup failed");
+    }
+
+    // Cleanup all workers
+    LOG_INFO("Cleaning up worker threads");
+    main_worker->OnCleanup();
+
+    // Cleanup application
+    OnUnInit();
+
+    // Cleanup signal handler
+    if (signal_handler_)
+        signal_handler_->Cleanup();
+    
+    LOG_INFO("All resources cleaned up, shutdown complete");
 }
 
 void App::Run()
@@ -70,15 +217,11 @@ void App::Run()
         }
     }
 
-	if (0 != OnCleanup())
-	{
-		return;
-	}
-
-    main_worker->OnCleanup();
-
-    OnUnInit();
-
-    if (signal_handler_)
-        signal_handler_->Cleanup();
+    LOG_INFO("Main loop exited, starting graceful shutdown");
+    
+    // Shutdown manager will handle the graceful shutdown sequence
+    if (shutdown_manager_)
+    {
+        shutdown_manager_->WaitForShutdown();
+    }
 }
