@@ -6,123 +6,157 @@
 
 namespace gb
 {
-Worker::Worker() 
+
+Worker::Worker(WorkerType type)
+	: worker_type_(type)
 {
 	scriptPtr_ = std::make_shared<Script>();
-    timer_manager_ = std::make_unique<TimerManager>();
+	timer_manager_ = std::make_unique<TimerManager>();
+	last_frame_time_ = std::chrono::steady_clock::now();
 }
 
-Worker::~Worker() 
+Worker::~Worker()
 {
 	Stop();
 }
 
-
 void Worker::Init(uint32_t id, size_t index)
 {
-    thread_id_ = id;
-    index_     = index;
-    executor_  = std::make_shared<WorkerExecutor>(weak_from_this(), false);
-    async_executor_ = std::make_shared<GbAsyncExecutor>(executor_);
+	thread_id_ = id;
+	index_ = index;
+	executor_ = std::make_shared<WorkerExecutor>(weak_from_this(), false);
+	async_executor_ = std::make_shared<GbAsyncExecutor>(executor_);
 }
 
 void Worker::SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic)
 {
-    worker_logic_ = worker_logic;
+	worker_logic_ = worker_logic;
 }
 
 void Worker::OnStart()
 {
-    LOG_INFO("Start");
-    runing_.store(true);  //启动线程了
-	//注册消息监听
+	if (worker_type_ == WorkerType::MAIN)
+	{
+		LOG_INFO("Main worker started");
+	}
+	else
+	{
+		LOG_INFO("Worker {} started", static_cast<int>(worker_type_));
+	}
 
-	//加载脚本
-    InitLua();
-}   
-
+	runing_.store(true);
+	InitLua();
+}
 
 void Worker::Run()
 {
-    auto last_time = std::chrono::steady_clock::now();
-    while (runing_)
-    {
-        std::unique_lock<std::mutex> lk(event_mutex_);
-        event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() { return !runing_.load() || events_.size_approx() > 0; });
-        lk.unlock();
-        if (!runing_)
-            break;
-		auto                         current_time = std::chrono::steady_clock::now();
-		std::chrono::duration<float> elapsed      = current_time - last_time;
-		last_time                                 = current_time;
-        OnUpdate(elapsed.count());
-        OnTick();
-    }
+	// 仅供工作线程使用
+	if (worker_type_ == WorkerType::MAIN)
+	{
+		LOG_ERROR("Main thread should use ProcessMainFrame(), not Run()");
+		return;
+	}
+
+	auto last_time = std::chrono::steady_clock::now();
+	while (runing_)
+	{
+		std::unique_lock<std::mutex> lk(event_mutex_);
+		event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() {
+			return !runing_.load() || events_.size_approx() > 0;
+		});
+		lk.unlock();
+
+		if (!runing_)
+			break;
+
+		auto current_time = std::chrono::steady_clock::now();
+		std::chrono::duration<float> elapsed = current_time - last_time;
+		last_time = current_time;
+
+		OnUpdate(elapsed.count());
+		OnTick();
+	}
+}
+
+void Worker::ProcessMainFrame()
+{
+	// 仅供主线程使用
+	if (worker_type_ != WorkerType::MAIN)
+	{
+		LOG_ERROR("Only main thread should call ProcessMainFrame()");
+		return;
+	}
+
+	auto current_time = std::chrono::steady_clock::now();
+	std::chrono::duration<float> elapsed = current_time - last_frame_time_;
+	last_frame_time_ = current_time;
+
+	OnUpdate(elapsed.count());
+	OnTick();
 }
 
 void Worker::Stop()
 {
-     runing_.store(false);
-     event_cv_.notify_all();
-
+	runing_.store(false);
+	event_cv_.notify_all();
 }
 
 int Worker::OnStartup()
 {
-
-    if (worker_logic_)
+	if (worker_logic_)
 		worker_logic_->OnStartup();
-    return 0;
+	return 0;
 }
 
 int Worker::OnUpdate(float elapsed)
 {
-    if (timer_manager_)
-        timer_manager_->Update();
+	if (timer_manager_)
+		timer_manager_->Update();
 
-    std::function<void()> func;
-    while (events_.try_dequeue(func))
-    {
-        if (func)
-            func();
-    }
+	std::function<void()> func;
+	while (events_.try_dequeue(func))
+	{
+		if (func)
+			func();
+	}
 
-    if (worker_logic_)
-        worker_logic_->OnUpdate(elapsed);
-    return 0;
+	if (worker_logic_)
+		worker_logic_->OnUpdate(elapsed);
+
+	return 0;
 }
 
 int Worker::OnTick()
 {
-    if (worker_logic_)
+	if (worker_logic_)
 		worker_logic_->OnTick();
-    return 0;
+	return 0;
 }
 
 int Worker::OnCleanup()
 {
-    if (worker_logic_)
+	if (worker_logic_)
 		worker_logic_->OnCleanup();
-    Stop();
+	Stop();
 	return 0;
 }
 
 void Worker::Post(const std::function<void(void)>& handler)
 {
-    if (runing_.load())
-    {
+	if (runing_.load())
+	{
 		events_.enqueue(handler);
-        event_cv_.notify_one();
-    }
+		event_cv_.notify_one();
+	}
 }
 
 void Worker::Post(std::function<void(void)>&& handler)
 {
-    if (runing_.load())
-    {
+	if (runing_.load())
+	{
 		events_.enqueue(std::move(handler));
-        event_cv_.notify_one();
-    }
+		event_cv_.notify_one();
+	}
 }
 
 uint32_t Worker::GetWorkerId()
@@ -130,25 +164,24 @@ uint32_t Worker::GetWorkerId()
 	return thread_id_;
 }
 
-
 uint32_t Worker::GetIndex()
 {
-    return index_;
+	return index_;
 }
 
 std::unique_ptr<TimerManager>& Worker::GetTimerManager()
 {
-    return timer_manager_;
+	return timer_manager_;
 }
 
 std::shared_ptr<WorkerExecutor> Worker::GetExecutor() const
 {
-    return executor_;
+	return executor_;
 }
 
 async_simple::Executor* Worker::getAsyncSimpleExecutor() const
 {
-    return async_executor_.get();
+	return async_executor_.get();
 }
 
 void Worker::InitLua()
@@ -156,37 +189,32 @@ void Worker::InitLua()
 	using sol::lib;
 	if (!scriptPtr_)
 		return;
-	scriptPtr_->open_libraries(lib::base, lib::package,lib::string,lib::table,lib::os,lib::bit32,lib::coroutine,lib::count,lib::debug,lib::ffi,lib::io,lib::jit,lib::math,lib::utf8);
-	//注册脚本 
+	scriptPtr_->open_libraries(lib::base, lib::package, lib::string, lib::table, lib::os, lib::bit32, lib::coroutine, lib::count, lib::debug, lib::ffi, lib::io, lib::jit, lib::math, lib::utf8);
 	_lua_(scriptPtr_);
-    sol::function require = (*scriptPtr_)["require"];
+	sol::function require = (*scriptPtr_)["require"];
 #ifdef MY_DEBUG_MODE
-    std::string _lua_socket = ResPath::Instance()->GetCurrentExeDirectory();
-#else 
-    std::string _lua_socket = ResPath::Instance()->FindResPath("../Release/bin/");
+	std::string _lua_socket = ResPath::Instance()->GetCurrentExeDirectory();
+#else
+	std::string _lua_socket = ResPath::Instance()->FindResPath("../Release/bin/");
 #endif
 
-#if ENGINE_PLATFORM != PLATFORM_WIN32	
-    _lua_socket += "?.so";
+#if ENGINE_PLATFORM != PLATFORM_WIN32
+	_lua_socket += "?.so";
 #endif
-    //加载luasocket
-    std::string package_cpath = (*scriptPtr_)["package"]["cpath"].get<std::string>();
-    (*scriptPtr_)["package"]["cpath"] = package_cpath + ";" + _lua_socket;
-    require("socket.core");
+	std::string package_cpath = (*scriptPtr_)["package"]["cpath"].get<std::string>();
+	(*scriptPtr_)["package"]["cpath"] = package_cpath + ";" + _lua_socket;
+	require("socket.core");
 
-
-	//LuaPanda
-	std::string script_path =  ResPath::Instance()->FindResPath("/script");
+	std::string script_path = ResPath::Instance()->FindResPath("/script");
 	std::string package_path = (*scriptPtr_)["package"]["path"];
-    package_path += ";" + script_path + "/?.lua";
-    (*scriptPtr_)["package"]["path"] = package_path;
-    //启动调试
-    auto result = scriptPtr_->safe_script_file(script_path + "/start_debug.lua");
-    if (!result.valid()) {
-        sol::error err = result;
-     
-        LOG_ERROR("Start Lua Debug Fail {}",err.what());
-    }
+	package_path += ";" + script_path + "/?.lua";
+	(*scriptPtr_)["package"]["path"] = package_path;
+	auto result = scriptPtr_->safe_script_file(script_path + "/start_debug.lua");
+	if (!result.valid())
+	{
+		sol::error err = result;
+		LOG_ERROR("Start Lua Debug Fail {}", err.what());
+	}
 
 	std::string scriptRootPath = ResPath::Instance()->FindResPath("script/main.lua");
 	scriptPtr_->Load(scriptRootPath);
