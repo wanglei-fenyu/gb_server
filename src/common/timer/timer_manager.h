@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include <memory_resource>
+#include <atomic>
 
 namespace gb
 {
@@ -20,6 +21,13 @@ public:
     int64_t RegisterSystemTimer(std::chrono::milliseconds time, std::function<void()>&& callFunc, bool loop = false);
     void    UnRegisterTimer(int64_t timerId);
     Timer*  GetTimer(int64_t timerId);
+
+public:
+    /// Enter shutdown mode: complete current frame timers, cancel others
+    void EnterShutdownMode();
+    
+    /// Check if timer manager is in shutdown mode
+    bool IsShuttingDown() const { return shutting_down_.load(); }
 
 private:
     struct SteadyCompare
@@ -43,6 +51,7 @@ private :
 
     std::pmr::unordered_map<int64_t, std::unique_ptr<Timer>> all_timers_{};
 	int64_t generate_timer_id_;
+    std::atomic<bool> shutting_down_{false};
 };
 
 }
