@@ -65,6 +65,16 @@ public:
     std::shared_ptr<WorkerExecutor> GetExecutor() const;
     async_simple::Executor* getAsyncSimpleExecutor() const;
 
+public:
+    /// Enter shutdown mode: stop accepting new tasks, process pending ones
+    void EnterShutdownMode();
+    
+    /// Check if worker is in shutdown mode
+    bool IsShuttingDown() const { return shutting_down_.load(); }
+    
+    /// Get the number of pending tasks
+    size_t GetPendingTaskCount() const { return events_.size_approx(); }
+
 private:
     void InitLua();
 
@@ -76,6 +86,7 @@ private:
 	moodycamel::ConcurrentQueue<std::function<void(void)>> events_;
     std::unique_ptr<TimerManager> timer_manager_;
 	std::atomic<bool> runing_ = false;
+    std::atomic<bool> shutting_down_ = false;
     std::mutex event_mutex_;
     std::condition_variable event_cv_;
 
