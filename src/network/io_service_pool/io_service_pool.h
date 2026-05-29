@@ -5,6 +5,8 @@
 #include "script/script.h"
 #include <concurrentqueue.h>
 #include <map>
+#include <atomic>
+
 namespace gb
 {
 
@@ -22,16 +24,19 @@ public:
 	void OnStart();
 	void Run();
 	void Stop();
+	void GracefulStop();
 	IoService& GetIoContext() { return m_ioContext_; }
 
 public:
 	uint32_t GetWorkerId();
+	bool IsShuttingDown() const { return shutting_down_.load(); }
 
 private:
 	IoService			 m_ioContext_;
 	IoServiceStrand		 m_ioContextStrand_;
 	
 	ThreadPtr    m_threadPtr_;
+	std::atomic<bool> shutting_down_{false};
 };
 
 using IoWorkerPtr = std::shared_ptr<IoWorker>;
@@ -48,6 +53,7 @@ public:
 	std::pair<int,IoService&> GetIoService();
     const std::vector<IoWorkerPtr>&    Workers() const;
 	void Stop();
+	void GracefulStop();
     void Run();
 
 public:
