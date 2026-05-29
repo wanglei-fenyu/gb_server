@@ -6,13 +6,11 @@
 
 namespace gb
 {
-
 Worker::Worker(WorkerType type)
 	: worker_type_(type)
 {
 	scriptPtr_ = std::make_shared<Script>();
-	timer_manager_ = std::make_unique<TimerManager>();
-	last_frame_time_ = std::chrono::steady_clock::now();
+    timer_manager_ = std::make_unique<TimerManager>();
 }
 
 Worker::~Worker()
@@ -20,143 +18,117 @@ Worker::~Worker()
 	Stop();
 }
 
+
 void Worker::Init(uint32_t id, size_t index)
 {
-	thread_id_ = id;
-	index_ = index;
-	executor_ = std::make_shared<WorkerExecutor>(weak_from_this(), false);
-	async_executor_ = std::make_shared<GbAsyncExecutor>(executor_);
+    thread_id_ = id;
+    index_     = index;
+    executor_  = std::make_shared<WorkerExecutor>(weak_from_this(), false);
+    async_executor_ = std::make_shared<GbAsyncExecutor>(executor_);
 }
 
 void Worker::SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic)
 {
-	worker_logic_ = worker_logic;
+    worker_logic_ = worker_logic;
 }
 
 void Worker::OnStart()
 {
-	if (worker_type_ == WorkerType::MAIN)
-	{
-		LOG_INFO("Main worker started");
-	}
-	else
-	{
-		LOG_INFO("Worker {} started", static_cast<int>(worker_type_));
-	}
+    if (worker_type_ == WorkerType::MAIN)
+        LOG_INFO("Main worker start");
+    else
+        LOG_INFO("Worker start index:{}", index_);
+    runing_.store(true);
+    InitLua();
+}   
 
-	runing_.store(true);
-	InitLua();
-}
 
 void Worker::Run()
 {
-	// 仅供工作线程使用
-	if (worker_type_ == WorkerType::MAIN)
-	{
-		LOG_ERROR("Main thread should use ProcessMainFrame(), not Run()");
-		return;
-	}
-
-	auto last_time = std::chrono::steady_clock::now();
-	while (runing_)
-	{
-		std::unique_lock<std::mutex> lk(event_mutex_);
-		event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() {
-			return !runing_.load() || events_.size_approx() > 0;
-		});
-		lk.unlock();
-
-		if (!runing_)
-			break;
-
-		auto current_time = std::chrono::steady_clock::now();
-		std::chrono::duration<float> elapsed = current_time - last_time;
-		last_time = current_time;
-
-		OnUpdate(elapsed.count());
-		OnTick();
-	}
+    auto last_time = std::chrono::steady_clock::now();
+    while (runing_)
+    {
+        std::unique_lock<std::mutex> lk(event_mutex_);
+        event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() { return !runing_.load() || events_.size_approx() > 0; });
+        lk.unlock();
+        if (!runing_)
+            break;
+		auto                         current_time = std::chrono::steady_clock::now();
+		std::chrono::duration<float> elapsed      = current_time - last_time;
+		last_time                                 = current_time;
+        ProcessFrame(elapsed.count());
+    }
 }
 
-void Worker::ProcessMainFrame()
+void Worker::ProcessFrame(float elapsed)
 {
-	// 仅供主线程使用
-	if (worker_type_ != WorkerType::MAIN)
-	{
-		LOG_ERROR("Only main thread should call ProcessMainFrame()");
-		return;
-	}
-
-	auto current_time = std::chrono::steady_clock::now();
-	std::chrono::duration<float> elapsed = current_time - last_frame_time_;
-	last_frame_time_ = current_time;
-
-	OnUpdate(elapsed.count());
-	OnTick();
+    OnUpdate(elapsed);
+    OnTick();
 }
 
 void Worker::Stop()
 {
-	runing_.store(false);
-	event_cv_.notify_all();
+     runing_.store(false);
+     event_cv_.notify_all();
+
 }
 
 int Worker::OnStartup()
 {
-	if (worker_logic_)
+
+    if (worker_logic_)
 		worker_logic_->OnStartup();
-	return 0;
+    return 0;
 }
 
 int Worker::OnUpdate(float elapsed)
 {
-	if (timer_manager_)
-		timer_manager_->Update();
+    if (timer_manager_)
+        timer_manager_->Update();
 
-	std::function<void()> func;
-	while (events_.try_dequeue(func))
-	{
-		if (func)
-			func();
-	}
+    std::function<void()> func;
+    while (events_.try_dequeue(func))
+    {
+        if (func)
+            func();
+    }
 
-	if (worker_logic_)
-		worker_logic_->OnUpdate(elapsed);
-
-	return 0;
+    if (worker_logic_)
+        worker_logic_->OnUpdate(elapsed);
+    return 0;
 }
 
 int Worker::OnTick()
 {
-	if (worker_logic_)
+    if (worker_logic_)
 		worker_logic_->OnTick();
-	return 0;
+    return 0;
 }
 
 int Worker::OnCleanup()
 {
-	if (worker_logic_)
+    if (worker_logic_)
 		worker_logic_->OnCleanup();
-	Stop();
+    Stop();
 	return 0;
 }
 
 void Worker::Post(const std::function<void(void)>& handler)
 {
-	if (runing_.load())
-	{
+    if (runing_.load())
+    {
 		events_.enqueue(handler);
-		event_cv_.notify_one();
-	}
+        event_cv_.notify_one();
+    }
 }
 
 void Worker::Post(std::function<void(void)>&& handler)
 {
-	if (runing_.load())
-	{
+    if (runing_.load())
+    {
 		events_.enqueue(std::move(handler));
-		event_cv_.notify_one();
-	}
+        event_cv_.notify_one();
+    }
 }
 
 uint32_t Worker::GetWorkerId()
@@ -164,24 +136,25 @@ uint32_t Worker::GetWorkerId()
 	return thread_id_;
 }
 
+
 uint32_t Worker::GetIndex()
 {
-	return index_;
+    return index_;
 }
 
 std::unique_ptr<TimerManager>& Worker::GetTimerManager()
 {
-	return timer_manager_;
+    return timer_manager_;
 }
 
 std::shared_ptr<WorkerExecutor> Worker::GetExecutor() const
 {
-	return executor_;
+    return executor_;
 }
 
 async_simple::Executor* Worker::getAsyncSimpleExecutor() const
 {
-	return async_executor_.get();
+    return async_executor_.get();
 }
 
 void Worker::InitLua()

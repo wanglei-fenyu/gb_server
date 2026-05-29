@@ -1,4 +1,5 @@
 #include "router.h"
+#include "common/worker/worker_manager.h"
 
 namespace gb
 {
@@ -58,7 +59,17 @@ namespace gb
         auto workers = route_table_.GetWorker(route_table_.ResolveServiceWorkerType(message_type));
         auto target  = PickWorker(workers, message_type, route_id).lock();
         if (!target)
+        {
+            auto main_worker = WorkerManager::Instance()->GetMainWorker();
+            if (main_worker)
+            {
+                auto executor = main_worker->GetExecutor();
+                if (executor)
+                    return *executor;
+                return WorkerExecutor::Worker(main_worker);
+            }
             return WorkerExecutor::Main();
+        }
         auto executor = target->GetExecutor();
         if (!executor)
             return WorkerExecutor::Worker(target);

@@ -51,8 +51,11 @@ public:
 
     static WorkerExecutor Main(bool inline_fallback = true)
     {
+        auto main_worker = WorkerManager::Instance()->GetMainWorker();
+        if (main_worker)
+            return WorkerExecutor(main_worker, inline_fallback);
         return WorkerExecutor(
-            [](Func fn) { WorkerManager::Instance()->PostMain(std::move(fn)); },
+            [](Func fn) { WorkerManager::Instance()->PostToMain(std::move(fn)); },
             []() { return WorkerManager::Instance()->IsMainThread(); },
             inline_fallback);
     }
