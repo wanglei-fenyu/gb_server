@@ -1,5 +1,6 @@
 
 #include "timer_manager.h"
+#include "log/log_help.h"
 
 namespace gb
 {
@@ -62,6 +63,12 @@ int64_t TimerManager::RegisterTimer(int64_t milliseconds, std::function<void()>&
 
 int64_t TimerManager::RegisterTimer(std::chrono::milliseconds time, std::function<void()>&& callFunc, bool loop /*= false*/)
 {
+    // Reject new timer registrations during shutdown
+    if (shutting_down_.load())
+    {
+        return -1;
+    }
+    
 	auto id = ++generate_timer_id_;
 	auto timer = std::make_unique<SteadyTimer>(time, id, loop, std::move(callFunc));
 	steady_timers_.push(timer.get());
@@ -76,7 +83,12 @@ int64_t TimerManager::RegisterSystemTimer(int64_t milliseconds, std::function<vo
 
 int64_t TimerManager::RegisterSystemTimer(std::chrono::milliseconds time, std::function<void()>&& callFunc, bool loop /*= false*/)
 {
-	
+    // Reject new timer registrations during shutdown
+    if (shutting_down_.load())
+    {
+        return -1;
+    }
+    
 	auto id = ++generate_timer_id_;
 	auto timer = std::make_unique<SystemTimer>(time, id, loop, std::move(callFunc));
 	system_timers_.push(timer.get());
@@ -96,10 +108,22 @@ void TimerManager::UnRegisterTimer(int64_t timerId)
 Timer* TimerManager::GetTimer(int64_t timerId)
 {
 	 auto it = all_timers_.find(timerId);
-     return (it != all_timers_.end()) ? it->second.get() : nullptr;
+      return (it != all_timers_.end()) ? it->second.get() : nullptr;
 }
 
-
-
+void TimerManager::EnterShutdownMode()
+{
+    shutting_down_.store(true);
+    LOG_INFO("TimerManager entering shutdown mode - completing current frame timers, cancelling future ones");
+    
+    // Cancel all non-expired timers to prevent them from being scheduled
+    for (auto& [id, timer] : all_timers_)
+    {
+        if (!timer->IsExpired() && timer->active_)
+        {
+            timer->Cancel();
+        }
+    }
+}
 
 }
