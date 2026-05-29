@@ -73,6 +73,12 @@ void Worker::Stop()
 
 }
 
+void Worker::EnterShutdownMode()
+{
+    shutting_down_.store(true);
+    LOG_INFO("Worker {} entering shutdown mode", index_);
+}
+
 int Worker::OnStartup()
 {
 
@@ -115,6 +121,12 @@ int Worker::OnCleanup()
 
 void Worker::Post(const std::function<void(void)>& handler)
 {
+    // During shutdown, reject new tasks
+    if (shutting_down_.load())
+    {
+        return;
+    }
+    
     if (runing_.load())
     {
 		events_.enqueue(handler);
@@ -124,6 +136,12 @@ void Worker::Post(const std::function<void(void)>& handler)
 
 void Worker::Post(std::function<void(void)>&& handler)
 {
+    // During shutdown, reject new tasks
+    if (shutting_down_.load())
+    {
+        return;
+    }
+    
     if (runing_.load())
     {
 		events_.enqueue(std::move(handler));
