@@ -30,7 +30,18 @@ void IoWorker::Run()
 void IoWorker::Stop()
 {
     m_ioContext_.stop();
-    m_threadPtr_->join();
+    if (m_threadPtr_ && m_threadPtr_->joinable())
+        m_threadPtr_->join();
+}
+
+void IoWorker::GracefulStop()
+{
+    shutting_down_.store(true);
+    LOG_INFO("IoWorker {} entering graceful shutdown", GetWorkerId());
+    m_ioContext_.stop();
+    if (m_threadPtr_ && m_threadPtr_->joinable())
+        m_threadPtr_->join();
+    LOG_INFO("IoWorker {} shutdown complete", GetWorkerId());
 }
 
 uint32_t IoWorker::GetWorkerId()
@@ -63,6 +74,15 @@ void IoServicePool::Stop()
     }
 }
 
+void IoServicePool::GracefulStop()
+{
+    LOG_INFO("IoServicePool graceful shutdown initiated");
+    for (auto& worker : m_workers)
+    {
+        worker->GracefulStop();
+    }
+    LOG_INFO("IoServicePool graceful shutdown complete");
+}
 
 
 IoWorkerPtr IoServicePool::GetWorker(int index)
