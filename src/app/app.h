@@ -9,6 +9,8 @@ namespace gb
 {
 class Worker;
 class SignalHandler;
+class ShutdownManager;
+class IoServicePool;
 }
 
 class App{
@@ -36,5 +38,13 @@ private:
     std::atomic<bool> runding_;
     std::chrono::milliseconds frame_duration_;
     std::unique_ptr<gb::SignalHandler> signal_handler_;
+    std::shared_ptr<gb::ShutdownManager> shutdown_manager_;
+    std::shared_ptr<gb::IoServicePool> io_service_pool_;
 
+private:
+    // Shutdown phase handlers
+    void OnPhaseStoppingIO(gb::ShutdownManager::ShutdownPhase phase);
+    void OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase);
+    void OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase);
+    void OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase);
 };
