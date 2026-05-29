@@ -32,7 +32,6 @@ private:
 private:
     std::thread http_thread;
     //gb::http::HttpServerPtr http_server;
-    GbLog                log;
 
     std::unique_ptr<gb::Server> server_;
 

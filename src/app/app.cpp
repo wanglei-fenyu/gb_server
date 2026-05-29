@@ -1,10 +1,10 @@
 #include "app.h"
-#include "log/log_help.h"
 #include "common/worker/worker_manager.h"
 #include "common/signal/signal_handler.h"
 #include "common/shutdown/shutdown_manager.h"
 #include "network/io_service_pool/io_service_pool.h"
 #include <thread>
+#include "common/res_path.h"
 
 void App::SetFrameRate(int fps)
 {
@@ -17,6 +17,9 @@ void App::SetFrameRate(int fps)
 
 int App::Init()
 {
+	log.Init(ResPath::Instance()->FindResPath("log4/test.log").c_str(), 1024 * 1024 * 1000, 10,
+             GbLog::ASYNC, GbLog::CONSOLE_AND_FILE, GbLog::LEVEL_INFO);
+
     gb::WorkerManager::Instance()->InitMainWorker();
     
     // Initialize shutdown manager
@@ -173,6 +176,7 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
         signal_handler_->Cleanup();
     
     LOG_INFO("All resources cleaned up, shutdown complete");
+    log.UnInit();
 }
 
 void App::Run()

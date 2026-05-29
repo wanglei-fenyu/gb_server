@@ -33,10 +33,7 @@
 
 int MyApp::OnInit()
 {
-	log.Init(ResPath::Instance()->FindResPath("log4/test.log").c_str(), 1024 * 1024 * 1000, 10,
-             GbLog::ASYNC, GbLog::CONSOLE_AND_FILE, GbLog::LEVEL_INFO);
 
-    
     gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
     
     auto narmal_worker = work_mng->CreateWorker(std::make_shared<NormalWorkerLogic>());
@@ -96,15 +93,13 @@ int MyApp::OnCleanup()
     for (auto worker : workers)
     {
         if (worker)
-            worker->Post([worker]() { worker->OnCleanup(); });
+            worker->OnCleanup();;
     }
     return 0;
 }
 
 int MyApp::OnUnInit()
 {
-    log.UnInit();
-    http_thread.join();
     return 0;
 }
 

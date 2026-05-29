@@ -55,9 +55,6 @@ async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
 
 int MyApp::OnInit()
 {
-	log.Init(ResPath::Instance()->FindResPath("log4/test.log").c_str(), 1024 * 1024 * 1000, 10,
-		   GbLog::ASYNC, GbLog::CONSOLE_AND_FILE, GbLog::LEVEL_INFO);
-
     //gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
     gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
     
@@ -157,7 +154,6 @@ int MyApp::OnCleanup()
 int MyApp::OnUnInit()
 {
     client_->Shutdown();
-    log.UnInit();
     return 0;
 }
 

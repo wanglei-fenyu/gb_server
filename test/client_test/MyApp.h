@@ -32,6 +32,5 @@ private:
 private:
     //gb::http::HttpClientPtr     http_client;
     std::shared_ptr<gb::Client> client_;
-	GbLog log;
 
 };

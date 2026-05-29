@@ -22,18 +22,18 @@ class ShutdownManager
 public:
     enum class ShutdownPhase
     {
-        Normal = 0,           // Normal operation
-        StoppingIO = 1,       // IO threads stop accepting, complete pending operations
-        ProcessingTasks = 2,  // Workers process all pending tasks
+        Normal           = 0, // Normal operation
+        StoppingIO       = 1, // IO threads stop accepting, complete pending operations
+        ProcessingTasks  = 2, // Workers process all pending tasks
         CompletingTimers = 3, // Timers complete current frame (cancel others)
-        Cleaning = 4,         // All threads cleanup and exit
-        Done = 5              // Shutdown complete
+        Cleaning         = 4, // All threads cleanup and exit
+        Done             = 5  // Shutdown complete
     };
 
     using ShutdownCallback = std::function<void(ShutdownPhase phase)>;
 
 public:
-    ShutdownManager() = default;
+    ShutdownManager()  = default;
     ~ShutdownManager() = default;
 
     /// Initialize with callbacks for each shutdown phase
@@ -41,8 +41,7 @@ public:
         ShutdownCallback on_stop_io,
         ShutdownCallback on_process_tasks,
         ShutdownCallback on_complete_timers,
-        ShutdownCallback on_cleanup
-    );
+        ShutdownCallback on_cleanup);
 
     /// Trigger graceful shutdown
     void Shutdown();
@@ -66,10 +65,13 @@ public:
     void ForceShutdown();
 
 private:
-    mutable std::mutex phase_mutex_;
-    std::condition_variable phase_cv_;
+private:
+    mutable std::mutex         phase_mutex_;
+    std::condition_variable    phase_cv_;
     std::atomic<ShutdownPhase> current_phase_{ShutdownPhase::Normal};
-    std::atomic<bool> shutdown_requested_{false};
+    std::atomic<bool>          shutdown_requested_{false};
+    std::atomic<bool>          is_advancing_{false};
+    std::atomic<bool>          pending_advance_{false}; // 新增：是否有待处理的推进请求
 
     ShutdownCallback on_stop_io_;
     ShutdownCallback on_process_tasks_;

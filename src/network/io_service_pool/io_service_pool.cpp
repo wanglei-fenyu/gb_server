@@ -20,7 +20,7 @@ void IoWorker::OnStart()
 
 void IoWorker::Run()
 {
-	m_threadPtr_ = std::make_shared<std::thread>([this]() {
+	m_threadPtr_ = std::make_unique<std::thread>([this]() {
 		OnStart();
         m_ioContext_.get_executor().on_work_started();
 		m_ioContext_.run();

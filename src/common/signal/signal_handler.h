@@ -1,9 +1,9 @@
 #pragma once
 #include <functional>
-#include <memory>
 #include <atomic>
 
 #ifdef _WIN32
+#include <winsock2.h> //windows的坑 ，必须在windows.h之前包含winsock2.h，否则会引发编译错误
 #include <windows.h>
 #else
 #include <csignal>

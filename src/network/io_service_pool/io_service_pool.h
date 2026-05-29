@@ -15,7 +15,7 @@ concept FUNC = requires () { std::is_function<F>::value; };
 
 class IoWorker : public std::enable_shared_from_this<IoWorker>
 {
-	using ThreadPtr = std::shared_ptr<std::thread>;
+	using ThreadPtr = std::unique_ptr<std::thread>;
 	using ScriptPtr = std::shared_ptr<Script>;
 public:
 	IoWorker();
