@@ -189,10 +189,11 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
         signal_handler_->Cleanup();
     
     LOG_INFO("All resources cleaned up, shutdown complete");
-    log.UnInit();
 
     if (shutdown_manager_)
         shutdown_manager_->NextPhase();
+
+    log.UnInit();
 }
 
 void App::Run()
