@@ -1,10 +1,10 @@
 #include "script.h"
 #include "register_script.h"
 #include "../network/msgpack/msgpack.hpp"
-#include "../network/session/session.h"
-#include "../network/net_manager/network_manager.h"
-#include "log/log_help.h"
-#include "network/message_meta.h"
+#include "network/io/session.h"
+#include "network/manager/network_manager.h"
+#include "log/log.h"
+#include "network/io/message_meta.h"
 #include <filesystem>
 #include "gbnet/buffer/compressed_def.h"
 using namespace gb;
@@ -14,14 +14,14 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
 {
 	auto network		= scriptPtr->create_table("net");
 
-    // ×¢²á MsgMode Ã¶¾Ù
+    // ×¢ï¿½ï¿½ MsgMode Ã¶ï¿½ï¿½
     scriptPtr->new_enum<gb::MsgMode>("MsgMode", {
         {"Msg",      gb::MsgMode::Msg},
         {"Request",  gb::MsgMode::Request},
         {"Response", gb::MsgMode::Response}
     });
     
-    // ×¢²á CompressType Ã¶¾Ù
+    // ×¢ï¿½ï¿½ CompressType Ã¶ï¿½ï¿½
     scriptPtr->new_enum<CompressType>("CompressType", {
         {"None", CompressType::CompressTypeNone},
         {"Gzip", CompressType::CompressTypeGzip},
@@ -29,11 +29,11 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         {"LZ4",  CompressType::CompressTypeLZ4}
     });
     
-    // ×¢²á Meta ½á¹¹Ìå
+    // ×¢ï¿½ï¿½ Meta ï¿½á¹¹ï¿½ï¿½
     scriptPtr->new_usertype<gb::Meta>("Meta",
         sol::constructors<gb::Meta(), gb::Meta(const gb::Meta&)>(),
         
-        // ³ÉÔ±±äÁ¿£¨¿É¶ÁÐ´£©
+        // ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½É¶ï¿½Ð´ï¿½ï¿½
         "mode",          &gb::Meta::mode,
         "id",            &gb::Meta::id,
         "type",          &gb::Meta::type,
@@ -41,7 +41,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         "sequence",      &gb::Meta::sequence,
         "compress_type", &gb::Meta::compress_type,
         
-        // ³ÉÔ±º¯Êý£¨¿ÉÌí¼Ó×Ô¶¨Òåº¯Êý£©
+        // ï¿½ï¿½Ô±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¶ï¿½ï¿½åº¯ï¿½ï¿½ï¿½ï¿½
         sol::meta_function::to_string, [](const gb::Meta& self) {
             return "Meta{mode=" + std::to_string(static_cast<int>(self.mode)) 
                  + ", id=" + std::to_string(self.id)
@@ -52,7 +52,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
                  + "}";
         },
         
-        // ±È½Ï²Ù×÷·û£¨¿ÉÑ¡£©
+        // ï¿½È½Ï²ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ñ¡ï¿½ï¿½
         sol::meta_function::equal_to, [](const gb::Meta& lhs, const gb::Meta& rhs) {
             return lhs.mode == rhs.mode 
                 && lhs.id == rhs.id

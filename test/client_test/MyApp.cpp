@@ -1,8 +1,8 @@
 #include "MyApp.h"
-#include "network/net_manager/network_manager.h"
-#include "common/worker/worker_manager.h"
+#include "network/manager/network_manager.h"
+#include "worker/worker_manager.h"
 #include "test.h"
-#include "common/res_path.h"
+#include "base/res_path.h"
 #include "cxxopts.hpp"
 static bool is_net_init = false;
 

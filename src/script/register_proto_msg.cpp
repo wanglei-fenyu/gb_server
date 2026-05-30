@@ -1,5 +1,5 @@
 #include "script.h"
-#include "../protobuf/msg.pb.h"
+#include "protobuf/msg.pb.h"
 
 void register_proto_msg(std::shared_ptr<Script>& scriptPtr) {
 scriptPtr->new_usertype<TestMsg>("TestMsg"

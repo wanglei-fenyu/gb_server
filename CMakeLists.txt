@@ -35,7 +35,7 @@ find_package(cxxopts REQUIRED)
 
 # 定义全局编译宏
 add_compile_definitions(
-    PROTOBUF_USE_DLLS
+    # PROTOBUF_USE_DLLS  # 静态链接 protobuf 时不需要
     BOOST_ASIO_HAS_STD_THREAD
     BOOST_CHARCONV_DISABLE_FLOAT128
 )
@@ -45,6 +45,6 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
 
-add_subdirectory(tools/luasocket)
+# add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
 add_subdirectory(test/server_test)
 add_subdirectory(test/client_test)

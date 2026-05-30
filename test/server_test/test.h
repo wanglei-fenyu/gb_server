@@ -1,6 +1,6 @@
 #pragma once
 #include "protobuf/msg.pb.h"
-#include "network/net_manager/network_manager.h"
+#include "network/manager/network_manager.h"
 
 void hello(const std::shared_ptr<gb::Session>& session);
 

@@ -9,6 +9,8 @@ os=Windows
 
 [options]
 boost/*:without_cobalt=True
+boost/*:without_process=True
+protobuf/*:shared=False
 
 [conf]
 tools.build:cxxflags+=["/DBOOST_CHARCONV_DISABLE_FLOAT128"]

@@ -1,6 +1,6 @@
-#pragma once 
+﻿#pragma once 
 #include <gbnet/buffer/buffer.h>
-#include "network/message_meta.h"
+#include "network/io/message_meta.h"
 #include <tuple>
 #include <type_traits>
 #include <utility>
@@ -9,7 +9,7 @@ namespace gb
 	void GetMsgData(Meta& meta, ReadBufferPtr buffer, int meta_size, int64_t data_size, std::string& out_s);
 
 	// ---------------------------------------------------------------------------
-	// function_traits — extract decayed argument types from any callable
+	// function_traits 鈥?浠庝换鎰忓彲璋冪敤瀵硅薄涓彁鍙栭€€鍖栧悗鐨勫弬鏁扮被鍨?
 	// ---------------------------------------------------------------------------
 	template <typename F>
 	struct function_traits : function_traits<decltype(&std::decay_t<F>::operator())> {};
@@ -32,7 +32,7 @@ namespace gb
 	};
 
 	// ---------------------------------------------------------------------------
-	// tuple_tail_t<Skip, Tuple> — sub-tuple skipping the first Skip elements
+	// tuple_tail_t<Skip, Tuple> 鈥?璺宠繃鍓峉kip涓厓绱犵殑瀛愬厓缁?
 	// ---------------------------------------------------------------------------
 	namespace detail
 	{

@@ -2,10 +2,10 @@
 #include "protobuf/msg.pb.h"
 #include "async_simple/coro/Lazy.h"
 #include "async_simple/coro/SyncAwait.h"
-#include "network/session/session.h"
-#include "log/log_help.h"
-#include "network/net/client.h"
-#include "network/net_manager/network_manager.h"
+#include "network/io/session.h"
+#include "log/log.h"
+#include "network/io/client.h"
+#include "network/manager/network_manager.h"
 void hello(TestMsg& msg);
 
 //async_simple::coro::Lazy<> test_coro(gb::SessionPtr& session)

@@ -1,8 +1,8 @@
 #pragma once
 #include "app/app.h"
-#include "network/net/client.h"
-#include "network/net_manager/network_manager.h"
-#include "common/worker/worker_logic_interface.h"
+#include "network/io/client.h"
+#include "network/manager/network_manager.h"
+#include "worker/worker_logic_interface.h"
 struct NormalWorkerLogic : public gb::IWorkerLogic
 {
 	virtual int OnStartup();

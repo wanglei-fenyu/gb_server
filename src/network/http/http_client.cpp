@@ -59,10 +59,10 @@ net::awaitable<HttpResponse> HttpClient::DoRequest(http::verb method,
     tcp::resolver resolver(ioc_);
     beast::tcp_stream stream(ioc_);
 
-    // resolve
+    // 域名解析
     auto results = co_await resolver.async_resolve(host, port, net::use_awaitable);
 
-    // connect
+    // 建立连接
     co_await stream.async_connect(results, net::use_awaitable);
 
     // 构造请求

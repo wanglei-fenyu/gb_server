@@ -1,6 +1,6 @@
 #include "test.h"
-#include "common/worker/worker_manager.h"
-#include "network/message_meta.h"
+#include "worker/worker_manager.h"
+#include "network/io/message_meta.h"
 void hello(const std::shared_ptr<gb::Session>& session)
 {
     LOG_INFO("Hello");

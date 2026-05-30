@@ -129,12 +129,12 @@ function(collect_dlls TARGET_NAME)
             endif()
         endif()
         
-        if(TARGET protobuf::libprotobuf)
-            get_target_property(PROTOBUF_TYPE protobuf::libprotobuf TYPE)
-            if(PROTOBUF_TYPE STREQUAL "SHARED_LIBRARY")
-                list(APPEND DLLS_TO_COPY "$<TARGET_FILE:protobuf::libprotobuf>")
-            endif()
-        endif()
+        # if(TARGET protobuf::libprotobuf)
+        #     get_target_property(PROTOBUF_TYPE protobuf::libprotobuf TYPE)
+        #     if(PROTOBUF_TYPE STREQUAL "SHARED_LIBRARY")
+        #         list(APPEND DLLS_TO_COPY "$<TARGET_FILE:protobuf::libprotobuf>")
+        #     endif()
+        # endif()
         
         # 将收集到的 DLL 列表缓存起来
         set(DLLS_TO_COPY ${DLLS_TO_COPY} CACHE INTERNAL "DLLs to copy for ${TARGET_NAME}")

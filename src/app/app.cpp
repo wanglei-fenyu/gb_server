@@ -1,10 +1,11 @@
-#include "app.h"
-#include "common/worker/worker_manager.h"
-#include "common/signal/signal_handler.h"
-#include "common/shutdown/shutdown_manager.h"
-#include "network/io_service_pool/io_service_pool.h"
+﻿#include "app.h"
+#include "worker/worker_manager.h"
+#include "async/signal_handler.h"
+#include "async/shutdown.h"
+#include "network/io/io_service_pool.h"
+#include "network/manager/network_manager.h"
 #include <thread>
-#include "common/res_path.h"
+#include "base/res_path.h"
 
 
 App::App(int argc, char* argv[])  : runding_(false), frame_duration_(std::chrono::milliseconds(16))
@@ -217,6 +218,12 @@ void App::Run()
    }
 
    main_worker->OnStartup();
+
+   // Freeze NetworkManager handler mappings into read-only atomics.
+   // After this, FindListenFunction and FindRpcFunction become lock-free.
+   // Each worker's thread_local RPC pending map handles all response routing.
+   // Must be called after all InitLua() and Register/Listen calls complete.
+   gb::NetworkManager::Instance()->Freeze();
 
     auto last_time = std::chrono::steady_clock::now();
     while (runding_)

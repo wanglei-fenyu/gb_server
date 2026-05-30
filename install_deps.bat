@@ -74,7 +74,7 @@ echo [SUCCESS] All dependencies installed!
 echo ========================================
 echo.
 echo Next steps:
-echo   conan install . --build=missing -s build_type=Debug
+echo   conan install . -pr=profiles/msvc_debug_pr --build="protobuf*" --build="boost*"
 echo   cmake --preset conan-debug
 echo   cmake --build --preset conan-debug
 echo.

@@ -9,6 +9,7 @@ os=Linux
 
 [options]
 boost/*:without_cobalt=True
+protobuf/*:shared=False
 
 [conf]
 tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]

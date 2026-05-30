@@ -1,9 +1,9 @@
-#pragma once
+﻿#pragma once
 
-#include "common/worker/worker.h"
+#include "worker/worker.h"
 #include "route_table.h"
 #include "message_type.h"
-#include "network/scheduler/executor.h"
+#include "network/rpc/executor.h"
 #include <functional>
 #include <mutex>
 namespace gb

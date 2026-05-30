@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 #include "async_simple/coro/Lazy.h"
-#include "network/scheduler/executor.h"
+#include "network/rpc/executor.h"
 #include <atomic>
 #include <coroutine>
 #include <functional>
@@ -140,8 +140,8 @@ public:
 
     bool await_suspend(std::coroutine_handle<> handle)
     {
-        // Capture the current executor before invoking the binder so that any
-        // synchronous completion still finds a valid executor reference.
+        // 鍦ㄨ皟鐢╞inder涔嬪墠鎹曡幏褰撳墠鎵ц鍣紝浠ヤ究浠讳綍
+        // 鍚屾瀹屾垚鏃朵粛鑳芥壘鍒版湁鏁堢殑鎵ц鍣ㄥ紩鐢ㄣ€?
         state_->Bind(handle, WorkerExecutor::Current(true));
         binder_(state_);
         return !state_->FinishSuspend();

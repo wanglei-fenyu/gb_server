@@ -1,8 +1,8 @@
-#pragma once 
-#include "network/session/session.h"
+﻿#pragma once 
+#include "network/io/session.h"
 #include "rpc_function.hpp"
-#include "network/network_function.hpp"
-#include "network/scheduler/executor.h"
+#include "network/rpc/function.hpp"
+#include "network/rpc/executor.h"
 #include <atomic>
 #include <mutex>
 #include <type_traits>
@@ -12,7 +12,7 @@ namespace gb
 {
 class Worker;
 
-constexpr int64_t kRpcdefaultTimeout = 1000 * 5; //5秒
+constexpr int64_t kRpcdefaultTimeout = 1000 * 5; // 5绉?
 
 typedef rpc_listen_fun rpc_done_call;
 
@@ -24,7 +24,7 @@ enum class RpcErrorCode {
     InvalidRequest = 3,
 };
 
-// Internal lifecycle state — replaces the three separate atomics
+// 鍐呴儴鐢熷懡鍛ㄦ湡鐘舵€?鈥?鏇夸唬鍘熸潵鐨勪笁涓嫭绔嬪師瀛愬彉閲?
 enum class RpcState : uint8_t {
     Pending = 0,
     Completed,
@@ -59,6 +59,7 @@ public:
     std::shared_ptr<Session>& GetSession() { return session_; }
     void                      Call(Meta& meta,const ReadBufferPtr buffer = nullptr);
     void                      Cancel();
+    void                      SetWorkerInfo(uint32_t worker_index, uint32_t local_seq) { worker_index_ = worker_index; local_seq_ = local_seq; }
     bool                      HasCallBack() const;
     bool                      HasSession();
     void                      Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta& meta, int meta_size, int64_t data_size);
@@ -69,12 +70,14 @@ public:
 
 private:
     void StartTimer();
-    void Finish(std::function<void()> completion, bool remove_call);
+    void Finish(std::function<void()> completion);
     void StopTimer();
     void DispatchCompletion(std::function<void()> cb) const;
 
 private:
     uint64_t                  id_;
+    uint32_t                  worker_index_{0};
+    uint32_t                  local_seq_{0};
     mutable std::optional<Asio::steady_timer> timer_;
     std::chrono::steady_clock::duration timeout_;
     std::function<void()>     timeout_func_;

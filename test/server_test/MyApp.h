@@ -1,8 +1,8 @@
 #pragma once
 #include "app/app.h"
-#include "common/worker/worker.h"
-#include "log/log_help.h"
-#include "network/net/server.h"
+#include "worker/worker.h"
+#include "log/log.h"
+#include "network/io/server.h"
 #define  SERVER_APP true
 struct NormalWorkerLogic : public gb::IWorkerLogic
 {

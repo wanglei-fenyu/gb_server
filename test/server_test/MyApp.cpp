@@ -1,8 +1,8 @@
 #include "MyApp.h"
 #include "test.h"
-#include "common/worker/worker_manager.h"
-#include "common/res_path.h"
-#include "network/net_manager/network_manager.h"
+#include "worker/worker_manager.h"
+#include "base/res_path.h"
+#include "network/manager/network_manager.h"
 #include "cxxopts.hpp"
 
  MyApp::MyApp(int argc, char* argv[]) :
@@ -17,7 +17,7 @@
 
     if (result.count("type"))
     {
-        // ����1����תΪ�ַ�����ת����
+        // 将type字符串转为int后转为APP_TYPE枚举值
         std::string typeStr   = result["type"].as<std::string>();
         int         typeValue = std::stoi(typeStr);
         appType_              = (APP_TYPE)typeValue;

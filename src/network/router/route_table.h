@@ -1,6 +1,6 @@
-#pragma once
+﻿#pragma once
 #include "message_type.h"
-#include "common/worker/worker.h"
+#include "worker/worker.h"
 #include <array>
 #include <functional>
 #include <mutex>

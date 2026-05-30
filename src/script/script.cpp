@@ -1,5 +1,5 @@
-#include "script.h"
-#include "log/log_help.h"
+﻿#include "script.h"
+#include "log/log.h"
 #include "lua_pb_parse.h"
 
 void Script::StackDump()
@@ -41,7 +41,7 @@ void Script::PrintTable(lua_State* pState, int index)
 {
 	int top = lua_gettop(pState);
 
-	/// 把栈上给定索引处的元素作一个副本压栈。
+	/// 鎶婃爤涓婄粰瀹氱储寮曞鐨勫厓绱犱綔涓€涓壇鏈帇鏍堛€?
 	lua_pushvalue(pState, index);
 
 	fprintf(stdout, "{\n");

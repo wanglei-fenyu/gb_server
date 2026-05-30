@@ -1,11 +1,11 @@
-#pragma once
-#include "app_def.h"
+﻿#pragma once
+#include "types.h"
 #include <memory>
 #include <chrono>
 #include <atomic>
-#include "common/shutdown/shutdown_manager.h"
-#include "common/signal/signal_handler.h"
-#include "log/log_help.h"
+#include "async/shutdown.h"
+#include "async/signal_handler.h"
+#include "log/log.h"
 
 namespace gb
 {
@@ -41,7 +41,7 @@ private:
     std::shared_ptr<gb::IoServicePool> io_service_pool_;
     GbLog                log;
 private:
-    // Shutdown phase handlers
+    // 鍏抽棴闃舵澶勭悊鍣?
     void OnPhaseStoppingIO(gb::ShutdownManager::ShutdownPhase phase);
     void OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase);
     void OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase);
