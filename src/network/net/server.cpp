@@ -89,15 +89,19 @@ void ServerImpl::Stop()
     if (!_is_runing)
         return;
     _is_runing = false;
-    _timer_worker->stop();
-    _listener->close();
+    if (_timer_worker)
+        _timer_worker->stop();
+    if (_listener)
+        _listener->close();
     StopSession();
+    if (_io_service_pool)
+        _io_service_pool->GracefulStop();
+    if (_maintain_thread)
+        _maintain_thread->GracefulStop();
 
     _timer_worker.reset();
     _listener.reset();
     ClearSession();
-    _io_service_pool->Stop();
-    _maintain_thread->Stop();
     _io_service_pool.reset();
     _maintain_thread.reset();
     _flow_controller.reset();
@@ -306,7 +310,7 @@ void ServerImpl::StopSession()
     std::lock_guard<std::mutex> _lock(_session_set_mutex);
     for (const auto& e : _session_set)
     {
-        e->close("server stop");
+        e->ShutDown();
     }
 }
 

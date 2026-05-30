@@ -46,13 +46,22 @@ void Worker::OnStart()
 void Worker::Run()
 {
     auto last_time = std::chrono::steady_clock::now();
-    while (runing_)
+    while (true)
     {
+        if (!runing_.load())
+        {
+            std::function<void()> func;
+            if (!events_.try_dequeue(func))
+                break;
+            if (func)
+                func();
+            continue;
+        }
+
         std::unique_lock<std::mutex> lk(event_mutex_);
         event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() { return !runing_.load() || events_.size_approx() > 0; });
         lk.unlock();
-        if (!runing_)
-            break;
+
 		auto                         current_time = std::chrono::steady_clock::now();
 		std::chrono::duration<float> elapsed      = current_time - last_time;
 		last_time                                 = current_time;
@@ -77,6 +86,38 @@ void Worker::EnterShutdownMode()
 {
     shutting_down_.store(true);
     LOG_INFO("Worker {} entering shutdown mode", index_);
+}
+
+bool Worker::CleanupInWorkerThread(int timeout_ms)
+{
+    if (worker_type_ == WorkerType::MAIN)
+    {
+        OnCleanup();
+        return true;
+    }
+
+    if (!runing_.load())
+    {
+        return true;
+    }
+
+    auto done = std::make_shared<std::promise<void>>();
+    auto future = done->get_future();
+    if (!EnqueueTask([self = shared_from_this(), done]() {
+            self->OnCleanup();
+            done->set_value();
+        }, true))
+    {
+        return false;
+    }
+
+    if (timeout_ms < 0)
+    {
+        future.wait();
+        return true;
+    }
+
+    return future.wait_for(std::chrono::milliseconds(timeout_ms)) == std::future_status::ready;
 }
 
 int Worker::OnStartup()
@@ -121,32 +162,13 @@ int Worker::OnCleanup()
 
 void Worker::Post(const std::function<void(void)>& handler)
 {
-    // During shutdown, reject new tasks
-    if (shutting_down_.load())
-    {
-        return;
-    }
-    
-    if (runing_.load())
-    {
-		events_.enqueue(handler);
-        event_cv_.notify_one();
-    }
+    std::function<void(void)> task = handler;
+    EnqueueTask(std::move(task), false);
 }
 
 void Worker::Post(std::function<void(void)>&& handler)
 {
-    // During shutdown, reject new tasks
-    if (shutting_down_.load())
-    {
-        return;
-    }
-    
-    if (runing_.load())
-    {
-		events_.enqueue(std::move(handler));
-        event_cv_.notify_one();
-    }
+    EnqueueTask(std::move(handler), false);
 }
 
 uint32_t Worker::GetWorkerId()
@@ -209,6 +231,22 @@ void Worker::InitLua()
 
 	std::string scriptRootPath = ResPath::Instance()->FindResPath("script/main.lua");
 	scriptPtr_->Load(scriptRootPath);
+}
+
+bool Worker::EnqueueTask(std::function<void(void)>&& handler, bool force)
+{
+    if (!handler)
+        return false;
+
+    if (!force && shutting_down_.load())
+        return false;
+
+    if (!runing_.load())
+        return false;
+
+    events_.enqueue(std::move(handler));
+    event_cv_.notify_one();
+    return true;
 }
 
 }

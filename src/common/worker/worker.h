@@ -11,6 +11,7 @@
 #include <condition_variable>
 #include <mutex>
 #include <chrono>
+#include <future>
 
 #include "worker_logic_interface.h"
 
@@ -68,6 +69,7 @@ public:
 public:
     /// Enter shutdown mode: stop accepting new tasks, process pending ones
     void EnterShutdownMode();
+    bool CleanupInWorkerThread(int timeout_ms = -1);
     
     /// Check if worker is in shutdown mode
     bool IsShuttingDown() const { return shutting_down_.load(); }
@@ -77,6 +79,7 @@ public:
 
 private:
     void InitLua();
+    bool EnqueueTask(std::function<void(void)>&& handler, bool force);
 
 private:
 	ScriptPtr	scriptPtr_;

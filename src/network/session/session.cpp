@@ -347,36 +347,44 @@ void Session::set_sent_callback(session_sent_callback_t call_bcak)
 
 void Session::ShutDown()
 {
+    _start_heartbeat.store(false);
+    _heartbeat_timer.cancel();
     close("shutdonw");
 }
 
 void Session::OnHeartbeat(const Error_code& ec)
 {
-    if (_start_heartbeat.load())
-    {
-        if (ec != Asio::error::operation_aborted)
-        {
-			Send(nullptr);
-        }
-        _heartbeat_timer.expires_at(_heartbeat_timer.expiry() + std::chrono::duration_cast<std::chrono::microseconds>(_heartbeat_duration));
-        _heartbeat_timer.async_wait([this](const Error_code& ec)
-            {
-                 OnHeartbeat(ec);
-            });
-    }
+    if (!_start_heartbeat.load())
+        return;
 
+    if (ec == Asio::error::operation_aborted)
+        return;
+
+	Send(nullptr);
+    ScheduleHeartbeatWait();
 }
+
 void Session::StartHeartbeat(duration_t _time_duration)
 {
     _heartbeat_duration = _time_duration;
+    _heartbeat_timer.cancel();
     _start_heartbeat.store(true);
-    if (_start_heartbeat.load())
-    {
-        _heartbeat_timer.expires_after(std::chrono::duration_cast<std::chrono::microseconds>(_time_duration));
-        _heartbeat_timer.async_wait([this](const Error_code& ec) {
-            OnHeartbeat(ec);
-            });
-    }
+    ScheduleHeartbeatWait();
+}
+
+void Session::ScheduleHeartbeatWait()
+{
+    if (!_start_heartbeat.load())
+        return;
+
+    _heartbeat_timer.expires_after(std::chrono::duration_cast<std::chrono::microseconds>(_heartbeat_duration));
+    std::weak_ptr<Session> weak_session = std::static_pointer_cast<Session>(shared_from_this());
+    _heartbeat_timer.async_wait([weak_session](const Error_code& ec) {
+        auto session = weak_session.lock();
+        if (!session)
+            return;
+        session->OnHeartbeat(ec);
+    });
 }
 
 }
