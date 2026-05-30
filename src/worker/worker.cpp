@@ -246,7 +246,7 @@ void Worker::InitLua()
 	(*scriptPtr_)["package"]["cpath"] = package_cpath + ";" + _lua_socket;
 	require("socket.core");
 
-	std::string script_path = ResPath::Instance()->FindResPath("/script");
+	std::string script_path = ResPath::Instance()->FindResPath("../script");
 	std::string package_path = (*scriptPtr_)["package"]["path"];
 	package_path += ";" + script_path + "/?.lua";
 	(*scriptPtr_)["package"]["path"] = package_path;
@@ -257,7 +257,7 @@ void Worker::InitLua()
 		LOG_ERROR("Start Lua Debug Fail {}", err.what());
 	}
 
-	std::string scriptRootPath = ResPath::Instance()->FindResPath("script/main.lua");
+	std::string scriptRootPath = ResPath::Instance()->FindResPath("../script/main.lua");
 	scriptPtr_->Load(scriptRootPath);
 }
 

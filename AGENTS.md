@@ -42,7 +42,7 @@ test/server_test/main.cpp     ← entrypoint (MyApp extends App)
        │    ├─ RPC system (msgpack + protobuf + coroutine via async_simple)
        │    └─ IoServicePool → N io_service threads
        ├─ Protobuf (src/protobuf/)  ← generated .pb.h/.pb.cc
-       ├─ Lua scripting (src/script/, res/script/main.lua)
+       ├─ Lua scripting (src/script/, script/main.lua)
        ├─ DB modules (src/db/mysql/, src/db/redis/)
        └─ HTTP client/server (src/network/http/)
 ```
@@ -122,7 +122,7 @@ tools/
 res/
   config/        — server_config.xml (IP/port per platform)
   proto/         — .proto files + proto.bat codegen
-  script/        — Lua scripts (main.lua loaded at startup)
+  script/        — Lua scripts (main.lua loaded at startup)  ← moved from res/script/
   ssl/           — self-signed CA, server, client certs
   log4/          — runtime logs (test_YYYY-MM-DD.log)
 ```
@@ -146,7 +146,7 @@ The bat file calls `tools/protoc.exe` twice: once for descriptor set, once for C
 
 ## Lua scripting
 
-- `res/script/main.lua` is loaded at worker startup.
+- `script/main.lua` is loaded at worker startup.
 - Lua can register network handlers via `net.Listen(type, func, "ProtoName")` and RPC methods via `net.Register("method", func)`.
 - Protobuf messages are accessible from Lua via the protobuf bridge (`create_msg`, field accessors).
 - `start_debug.lua` enables LuaPanda debugger.
