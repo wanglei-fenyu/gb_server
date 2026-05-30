@@ -52,7 +52,7 @@ rpc_listen_fun MakeRpcHandler(F f)
 	using ArgsTuple = typename function_traits<std::decay_t<F>>::args_tuple;
 	constexpr std::size_t N = std::tuple_size_v<ArgsTuple>;
 
-	return [f](const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size) mutable -> void {
+	return [f,N](const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size) mutable -> void {
 		if constexpr (N == 0)
 		{
 			f();
