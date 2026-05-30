@@ -15,9 +15,8 @@ class IoServicePool;
 
 class App{
 public:
-    App(int argc, char* argv[])
-        : runding_(false), frame_duration_(std::chrono::milliseconds(16)) {}
-	virtual ~App() {}
+    App(int argc, char* argv[]);
+          virtual ~App();
 	APP_TYPE GetAppType() { return appType_; }
     void SetFrameRate(int fps);
     int Init();

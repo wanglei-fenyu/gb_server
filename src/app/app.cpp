@@ -6,6 +6,16 @@
 #include <thread>
 #include "common/res_path.h"
 
+
+App::App(int argc, char* argv[])  : runding_(false), frame_duration_(std::chrono::milliseconds(16))
+{
+}
+
+App::~App()
+{
+    log.UnInit();
+}
+
 void App::SetFrameRate(int fps)
 {
     if (fps > 0)
@@ -193,7 +203,6 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
     if (shutdown_manager_)
         shutdown_manager_->NextPhase();
 
-    log.UnInit();
 }
 
 void App::Run()
