@@ -3,9 +3,9 @@
 #include <memory>
 #include <chrono>
 #include <atomic>
-#include "common\shutdown\shutdown_manager.h"
-#include "common\signal\signal_handler.h"
-#include "log\log_help.h"
+#include "common/shutdown/shutdown_manager.h"
+#include "common/signal/signal_handler.h"
+#include "log/log_help.h"
 
 namespace gb
 {
