@@ -49,6 +49,9 @@ public:
     
 
 private:
+    void ScheduleHeartbeatWait();
+
+private:
     session_connected_callback_t _connected_callback;
     session_closed_callback_t    _closed_callback;
     session_received_callback_t  _received_callback;

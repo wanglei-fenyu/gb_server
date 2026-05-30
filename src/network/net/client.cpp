@@ -63,14 +63,18 @@ void ClientImpl::Stop()
     if (!_is_runing)
         return;
     
-    _timer_worker->stop();
+    _is_runing = false;
+    if (_timer_worker)
+        _timer_worker->stop();
     StopSessions();
-    _io_service_pool->Stop();
+    if (_io_service_pool)
+        _io_service_pool->GracefulStop();
     
     _timer_worker.reset();
     ClearSessions();
 
-    _maintain_thread->Stop();
+    if (_maintain_thread)
+        _maintain_thread->GracefulStop();
     _io_service_pool.reset();
     _maintain_thread.reset();
     _flow_controller.reset();
@@ -268,7 +272,7 @@ void ClientImpl::StopSessions()
 	std::lock_guard<std::mutex> _lock(_session_map_mutex);
     for (auto& [endpoint,session] : _session_map)
 	{
-        session->close("client stop");
+        session->ShutDown();
 	}
 }
 

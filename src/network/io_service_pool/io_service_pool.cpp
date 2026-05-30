@@ -20,15 +20,17 @@ void IoWorker::OnStart()
 
 void IoWorker::Run()
 {
+    work_guard_.emplace(Asio::make_work_guard(m_ioContext_));
 	m_threadPtr_ = std::make_unique<std::thread>([this]() {
 		OnStart();
-        m_ioContext_.get_executor().on_work_started();
 		m_ioContext_.run();
 	});
 }
 
 void IoWorker::Stop()
 {
+    if (work_guard_)
+        work_guard_->reset();
     m_ioContext_.stop();
     if (m_threadPtr_ && m_threadPtr_->joinable())
         m_threadPtr_->join();
@@ -38,6 +40,8 @@ void IoWorker::GracefulStop()
 {
     shutting_down_.store(true);
     LOG_INFO("IoWorker {} entering graceful shutdown", GetWorkerId());
+    if (work_guard_)
+        work_guard_->reset();
     m_ioContext_.stop();
     if (m_threadPtr_ && m_threadPtr_->joinable())
         m_threadPtr_->join();

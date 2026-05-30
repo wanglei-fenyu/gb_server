@@ -155,28 +155,44 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
     LOG_INFO("=== Phase 4: Cleaning up resources ===");
     
     auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
-    if (!main_worker)
-        return;
-
-    // Call application cleanup
     if (0 != OnCleanup())
     {
         LOG_ERROR("OnCleanup failed");
     }
 
-    // Cleanup all workers
     LOG_INFO("Cleaning up worker threads");
-    main_worker->OnCleanup();
+    auto workers = gb::WorkerManager::Instance()->GetWorkers();
+    for (auto& worker : workers)
+    {
+        if (!worker)
+            continue;
+        if (!worker->CleanupInWorkerThread(5000))
+        {
+            LOG_WARN("Worker {} cleanup timeout, forcing stop", worker->GetIndex());
+            worker->Stop();
+        }
+    }
 
-    // Cleanup application
+    auto& worker_threads = gb::WorkerManager::Instance()->GetThreads();
+    for (auto& thread : worker_threads)
+    {
+        if (thread.joinable())
+            thread.join();
+    }
+
+    if (main_worker)
+        main_worker->OnCleanup();
+
     OnUnInit();
 
-    // Cleanup signal handler
     if (signal_handler_)
         signal_handler_->Cleanup();
     
     LOG_INFO("All resources cleaned up, shutdown complete");
     log.UnInit();
+
+    if (shutdown_manager_)
+        shutdown_manager_->NextPhase();
 }
 
 void App::Run()
@@ -223,9 +239,10 @@ void App::Run()
 
     LOG_INFO("Main loop exited, starting graceful shutdown");
     
-    // Shutdown manager will handle the graceful shutdown sequence
     if (shutdown_manager_)
     {
+        if (!shutdown_manager_->IsShuttingDown())
+            shutdown_manager_->Shutdown();
         shutdown_manager_->WaitForShutdown();
     }
 }

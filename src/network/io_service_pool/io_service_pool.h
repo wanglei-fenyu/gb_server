@@ -6,6 +6,7 @@
 #include <concurrentqueue.h>
 #include <map>
 #include <atomic>
+#include <optional>
 
 namespace gb
 {
@@ -37,6 +38,7 @@ private:
 	
 	ThreadPtr    m_threadPtr_;
 	std::atomic<bool> shutting_down_{false};
+    std::optional<Asio::executor_work_guard<IoService::executor_type>> work_guard_;
 };
 
 using IoWorkerPtr = std::shared_ptr<IoWorker>;
