@@ -16,10 +16,11 @@ enum APP_TYPE
     APP_GAME = 1 << 4,
     APP_SPACE = 1 << 5,
     APP_ROBOT = 1 << 6,
+    APP_GATEWAY = 1 << 7,
 
     APP_APPMGR = APP_GAME_MGR | APP_SPACE_MGR,
 
-    APP_ALL = APP_DB_MGR | APP_GAME_MGR | APP_SPACE_MGR | APP_LOGIN | APP_GAME | APP_SPACE,
+    APP_ALL = APP_DB_MGR | APP_GAME_MGR | APP_SPACE_MGR | APP_LOGIN | APP_GAME | APP_SPACE | APP_GATEWAY,
 };
 
 
@@ -36,7 +37,7 @@ class AppTypeMgr : public Singleton<AppTypeMgr>
 public:
     AppTypeMgr();
 	std::string GetAppName(APP_TYPE appType);
-    std::pair<std::string, std::string> GetServerIpPort(int os_type = UIR_TYPE::UT_None);
+    std::pair<std::string, std::string> GetServerIpPort(APP_TYPE app_type = APP_Global, int os_type = UIR_TYPE::UT_None);
 
 	
 private:

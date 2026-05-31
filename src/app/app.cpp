@@ -33,7 +33,7 @@ int App::Init()
 
     gb::WorkerManager::Instance()->InitMainWorker();
     
-    // Initialize shutdown manager
+    // 初始化关闭管理器
     shutdown_manager_ = std::make_shared<gb::ShutdownManager>();
     shutdown_manager_->Initialize(
         [this](gb::ShutdownManager::ShutdownPhase phase) { OnPhaseStoppingIO(phase); },
@@ -62,13 +62,13 @@ void App::Stop()
 void App::OnPhaseStoppingIO(gb::ShutdownManager::ShutdownPhase phase)
 {
     LOG_INFO("=== Phase 1: Stopping IO threads ===");
-    // Stop IO service pool from accepting new messages
+    // 停止 IO 服务池，不再接受新消息
     if (io_service_pool_)
     {
         io_service_pool_->GracefulStop();
     }
     LOG_INFO("IO threads stopped, proceeding to next phase");
-    // Move to next phase after brief delay
+    // 短暂延迟后进入下一阶段
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     if (shutdown_manager_)
         shutdown_manager_->NextPhase();
@@ -76,9 +76,9 @@ void App::OnPhaseStoppingIO(gb::ShutdownManager::ShutdownPhase phase)
 
 void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
 {
-    LOG_INFO("=== Phase 2: Processing pending tasks ===");
+    LOG_INFO("=== Phase 3: Processing pending tasks ===");
     
-    // Enter shutdown mode for all workers
+    // 所有 Worker 进入关闭模式
     auto workers = gb::WorkerManager::Instance()->GetWorkers();
     for (auto& worker : workers)
     {
@@ -90,7 +90,7 @@ void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
     if (main_worker)
         main_worker->EnterShutdownMode();
     
-    // Wait for pending tasks to be processed (max 5 seconds)
+    // 等待待处理任务处理完毕（最长 5 秒）
     auto start_time = std::chrono::steady_clock::now();
     bool all_empty = false;
     
@@ -126,9 +126,9 @@ void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
 
 void App::OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase)
 {
-    LOG_INFO("=== Phase 3: Completing current timer frame ===");
+    LOG_INFO("=== Phase 2: Completing current timer frame ===");
     
-    // Enter shutdown mode for all timer managers (cancel future timers, complete current frame)
+    // 所有定时器管理器进入关闭模式（取消未来定时器，完成当前帧）
     auto workers = gb::WorkerManager::Instance()->GetWorkers();
     for (auto& worker : workers)
     {
@@ -144,7 +144,7 @@ void App::OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase)
         main_worker->GetTimerManager()->EnterShutdownMode();
     }
     
-    // Execute one more frame to complete current timers
+    // 再执行一帧以完成当前定时器
     LOG_INFO("Executing final timer frame");
     auto last_time = std::chrono::steady_clock::now();
     auto current_time = std::chrono::steady_clock::now();
@@ -219,10 +219,10 @@ void App::Run()
 
    main_worker->OnStartup();
 
-   // Freeze NetworkManager handler mappings into read-only atomics.
-   // After this, FindListenFunction and FindRpcFunction become lock-free.
-   // Each worker's thread_local RPC pending map handles all response routing.
-   // Must be called after all InitLua() and Register/Listen calls complete.
+   // 将 NetworkManager 的处理器映射冻结为只读原子指针。
+   // 此后，FindListenFunction 和 FindRpcFunction 变为无锁访问。
+   // 每个 worker 的 thread_local RPC 待处理映射处理所有响应路由。
+   // 必须在所有 InitLua() 和 Register/Listen 调用完成后调用。
    gb::NetworkManager::Instance()->Freeze();
 
     auto last_time = std::chrono::steady_clock::now();

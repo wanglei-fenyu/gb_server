@@ -41,7 +41,7 @@ private:
     std::shared_ptr<gb::IoServicePool> io_service_pool_;
     GbLog                log;
 private:
-    // 鍏抽棴闃舵澶勭悊鍣?
+    // 关闭阶段处理器
     void OnPhaseStoppingIO(gb::ShutdownManager::ShutdownPhase phase);
     void OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase);
     void OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase);
