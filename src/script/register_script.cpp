@@ -14,14 +14,14 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
 {
 	auto network		= scriptPtr->create_table("net");
 
-    // ע�� MsgMode ö��
+    // 注册 MsgMode 枚举
     scriptPtr->new_enum<gb::MsgMode>("MsgMode", {
         {"Msg",      gb::MsgMode::Msg},
         {"Request",  gb::MsgMode::Request},
         {"Response", gb::MsgMode::Response}
     });
     
-    // ע�� CompressType ö��
+    // 注册 CompressType 枚举
     scriptPtr->new_enum<CompressType>("CompressType", {
         {"None", CompressType::CompressTypeNone},
         {"Gzip", CompressType::CompressTypeGzip},
@@ -29,11 +29,11 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         {"LZ4",  CompressType::CompressTypeLZ4}
     });
     
-    // ע�� Meta �ṹ��
+    // 注册 Meta 结构体
     scriptPtr->new_usertype<gb::Meta>("Meta",
         sol::constructors<gb::Meta(), gb::Meta(const gb::Meta&)>(),
         
-        // ��Ա�������ɶ�д��
+        // 成员变量可读写
         "mode",          &gb::Meta::mode,
         "id",            &gb::Meta::id,
         "type",          &gb::Meta::type,
@@ -41,7 +41,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         "sequence",      &gb::Meta::sequence,
         "compress_type", &gb::Meta::compress_type,
         
-        // ��Ա�������������Զ��庯����
+        // 成员函数（通过自定义函数实现）
         sol::meta_function::to_string, [](const gb::Meta& self) {
             return "Meta{mode=" + std::to_string(static_cast<int>(self.mode)) 
                  + ", id=" + std::to_string(self.id)
@@ -52,7 +52,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
                  + "}";
         },
         
-        // �Ƚϲ���������ѡ��
+        // 比较操作符（可选）
         sol::meta_function::equal_to, [](const gb::Meta& lhs, const gb::Meta& rhs) {
             return lhs.mode == rhs.mode 
                 && lhs.id == rhs.id

@@ -2,7 +2,7 @@
 #include <fstream>
 #include <iostream>
 #include <string>
-#include "spdlog/async.h" //鏀寔寮傛鏃ュ織
+#include "spdlog/async.h" //支持异步日志
 #include "spdlog/async_logger.h"
 #include "spdlog/details/thread_pool.h"
 #include "spdlog/sinks/basic_file_sink.h"
@@ -59,10 +59,10 @@ bool GbLog::Init(const char* nFileName, const int nMaxFileSize, const int nMaxFi
 
 	try
 	{
-		//sink瀹瑰櫒
+		//sink容器
 		std::vector<spdlog::sink_ptr> vecSink;
 
-		//鎺у埗鍙?
+		//控制台
 		if (outPos & CONSOLE)
 		{
 			const char* pFormat = "%^%Y-%m-%d %H:%M:%S.%e|t:%t|%s:%#|%v%$";
@@ -71,7 +71,7 @@ bool GbLog::Init(const char* nFileName, const int nMaxFileSize, const int nMaxFi
 			vecSink.push_back(console_sink);
 		}
 
-		//鏂囦欢
+		//文件
 		if (outPos & FILE)
 		{
 			const char* file_pattern = "[%l]|%Y-%m-%d %H:%M:%S.%e|t:%t|%s:%#|%v";
@@ -80,27 +80,27 @@ bool GbLog::Init(const char* nFileName, const int nMaxFileSize, const int nMaxFi
 			vecSink.push_back(file_sink);
 		}
 
-		//璁剧疆logger浣跨敤澶氫釜sink
-		if (outMode == ASYNC)//寮傛
+		//设置logger使用多个sink
+		if (outMode == ASYNC)//异步
 		{
             spdlog::init_thread_pool(102400, 1);
 			auto tp = spdlog::thread_pool();
 			m_pLogger = std::make_shared<spdlog::async_logger>(LOG_NAME, begin(vecSink), end(vecSink), tp, spdlog::async_overflow_policy::block);
 			
 		}
-		else//鍚屾
+		else//同步
 		{
 			m_pLogger = std::make_shared<spdlog::logger>(LOG_NAME, begin(vecSink), end(vecSink));
 		}
 		m_pLogger->set_level((spdlog::level::level_enum)outLevel);
 
-		//閬囧埌warn绾у埆锛岀珛鍗砯lush鍒版枃浠?
+		//遇到warn级别，立即flush到文件
 		m_pLogger->flush_on(spdlog::level::warn);
-		//瀹氭椂flush鍒版枃浠讹紝姣忎笁绉掑埛鏂颁竴娆?
+		//定时flush到文件，每三秒刷新一次
 		spdlog::flush_every(std::chrono::seconds(3));
 		spdlog::register_logger(m_pLogger);
 
-		//娉ㄥ唽缃戠粶鏃ュ織
+		//注册网络日志
 		netlog::SetLogSink(&NetlogToSpdlog);
 	}
 	catch (const spdlog::spdlog_ex& ex)
