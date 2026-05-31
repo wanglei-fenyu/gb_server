@@ -69,7 +69,7 @@ void NetworkManager::CallImpl(RpcCallPtr call, std::string method, sol::variadic
 	uint64_t method_key = MD5::MD5Hash64(method.c_str());
 	meta.method = method_key;
 	meta.mode = MsgMode::Request;
-	// sequence鍜宑all->SetId鍦–allImpl(Meta&, RpcCallPtr, ReadBufferPtr)鍐呴儴澶勭悊
+	// sequence和call->SetId在CallImpl(Meta&, RpcCallPtr, ReadBufferPtr)内部处理
 	if (args.size() > 0)
 	{
 		std::vector<uint8_t> data = gb::msgpack::pack(args);
@@ -90,9 +90,9 @@ void NetworkManager::CallImpl(gb::Meta& meta, RpcCallPtr call, const ReadBufferP
 	if (!call)
 		return;
 
-	// 灏?worker_index << 32 | local_seq)缂栫爜鍒?4浣峴equence瀛楁
-	// IO绾跨▼绋嶅悗瑙ｇ爜姝や俊鎭紝灏嗗搷搴旇矾鐢卞埌姝ｇ‘鐨刉orker
-	// 鏃犻渶璁块棶浠讳綍鍏变韩鏄犲皠
+	// 将(worker_index << 32 | local_seq)编码到64位sequence字段
+	// IO线程稍后解码此信息，将响应路由到正确的Worker
+	// 无需访问任何共享映射
 	auto worker = WorkerManager::Instance()->GetCurWorker();
 	if (!worker)
 	{
@@ -110,9 +110,9 @@ void NetworkManager::CallImpl(gb::Meta& meta, RpcCallPtr call, const ReadBufferP
 	call->SetId(sid.value);
 	call->SetWorkerInfo(worker_index, local_seq);
 
-	// 瀛樺偍鍒板綋鍓峎orker鐨勭嚎绋嬪眬閮ㄥ緟澶勭悊鏄犲皠涓?鈥?鏃犻攣
-	// 鍝嶅簲锛堟垨瓒呮椂锛夊皢閫氳繃Worker::TakePendingRpc(local_seq)绉婚櫎瀹?
-	// 鍦ㄥ悓涓€涓猈orker绾跨▼涓?
+	// 存储到当前Worker的线程局部待处理映射中——无锁
+	// 响应（或超时）将通过Worker::TakePendingRpc(local_seq)移除它
+	// 在同一个Worker线程中
 	worker->StorePendingRpc(local_seq, call);
 
 	call->BindCurrentExecutor();
@@ -144,7 +144,7 @@ WorkerExecutor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t ro
 
 net_listen_fun NetworkManager::FindListenFunction(uint32_t type)
 {
-    // 蹇€熻矾寰勶細浠庡喕缁撶殑鍙鏄犲皠璇诲彇 鈥?鏃犻攣
+    // 快速路径：从冻结的只读映射读取——无锁
     auto* frozen = frozen_listen_map_.load(std::memory_order_acquire);
     if (frozen)
     {
@@ -153,7 +153,7 @@ net_listen_fun NetworkManager::FindListenFunction(uint32_t type)
             return it->second;
         return {};
     }
-    // 鍥為€€锛氫粠鍙彉鏄犲皠璇诲彇锛堝喕缁撳墠锛?
+    // 回退：从可变映射读取（冻结前）
     std::lock_guard<std::mutex> lock(listen_mutex_);
     auto it = listen_function_map_.find(type);
     if (it != listen_function_map_.end())
@@ -163,7 +163,7 @@ net_listen_fun NetworkManager::FindListenFunction(uint32_t type)
 
 rpc_listen_fun NetworkManager::FindRpcFunction(uint64_t method)
 {
-    // 蹇€熻矾寰勶細浠庡喕缁撶殑鍙鏄犲皠璇诲彇 鈥?鏃犻攣
+    // 快速路径：从冻结的只读映射读取——无锁
     auto* frozen = frozen_rpc_interface_map_.load(std::memory_order_acquire);
     if (frozen)
     {
@@ -172,7 +172,7 @@ rpc_listen_fun NetworkManager::FindRpcFunction(uint64_t method)
             return it->second;
         return {};
     }
-    // 鍥為€€锛氫粠鍙彉鏄犲皠璇诲彇锛堝喕缁撳墠锛?
+    // 回退：从可变映射读取（冻结前）
     std::lock_guard<std::mutex> lock(rpc_interface_mutex_);
     auto it = rpc_interface_map_.find(method);
     if (it != rpc_interface_map_.end())
@@ -208,8 +208,8 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         }
         case MsgMode::Response:
         {
-            // 浠?4浣峴equence瀛楁瑙ｇ爜worker_index + local_seq
-            // IO绾跨▼浠庝笉璁块棶鍏变韩鏄犲皠 鈥?鍙В鐮佸拰杞彂
+            // 从64位sequence字段解码worker_index + local_seq
+            // IO线程从不访问共享映射——只解码和转发
             SequenceId sid;
             sid.value       = meta.sequence;
             uint32_t worker_index = sid.index;
@@ -223,8 +223,8 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
                 return;
             }
 
-            // 鎶曢€掑埌鎵€灞濿orker绾跨▼锛屼互渚垮湪鍏剁嚎绋嬪眬閮ㄥ緟澶勭悊鏄犲皠涓煡鎵捐皟鐢?
-            //锛圵orker绔棤閿侊級
+            // 投递到所属Worker线程，以便在其线程局部待处理映射中查找调用
+            //（Worker端无锁）
             worker->Post([session, buffer, meta, meta_size, data_size, local_seq]() mutable {
                 auto call = Worker::TakePendingRpc(local_seq);
                 if (call)
@@ -239,11 +239,11 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
 
 void NetworkManager::Freeze()
 {
-    // 瀵瑰彲鍙樻槧灏勫垱寤哄喕缁撳揩鐓?
-    // 姝ゅ悗锛屾墍鏈夎鍙栭兘閫氳繃鍘熷瓙鎸囬拡杩涜 鈥?鏃犻攣
-    // 涓や釜鏄犲皠鍙垎閰嶄竴娆★紝姘镐笉閲婃斁锛堟湁鎰忎负涔嬶級
-    // Freeze()涔嬪悗鐨勪慨鏀硅闈欓粯蹇界暐锛堝啓鍏ュ彲鍙樻槧灏勶紝浣?
-    // 璇诲彇鍙湅鍒板喕缁撶増鏈級
+    // 对可变映射创建冻结快照
+    // 此后，所有读取都通过原子指针进行——无锁
+    // 两个映射只分配一次，永不释放（有意为之）
+    // Freeze()之后的修改被静默忽略（写入可变映射，但
+    // 读取只看到冻结版本）
     auto* listen_snapshot = new ListenMap();
     auto* rpc_snapshot    = new RpcInterfaceMap();
     {

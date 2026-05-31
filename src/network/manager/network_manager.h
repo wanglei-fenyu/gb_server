@@ -67,8 +67,8 @@ public:
 		uint64_t method_key = MD5::MD5Hash64(method.c_str());
 		meta.method = method_key;
 		meta.mode = MsgMode::Request;
-		// sequence鍜宑all->SetId鍦–allImpl(Meta&, RpcCallPtr, ReadBufferPtr)鍐呴儴澶勭悊
-		// 鐢ㄤ簬灏唚orker_index + local_seq缂栫爜鍒?4浣峴equence瀛楁涓?
+		// sequence和call->SetId在CallImpl(Meta&, RpcCallPtr, ReadBufferPtr)内部处理
+		// 用于将worker_index + local_seq编码到64位sequence字段中
 		if constexpr (sizeof...(args) > 0)
 		{
 			std::vector<uint8_t> data = gb::msgpack::pack<Args...>(std::forward<Args>(args)...);
@@ -108,10 +108,10 @@ public:
 	void OnReceiveCall(const SessionPtr& session, const ReadBufferPtr& buffer, int meta_size, int64_t data_size);
     Router& GetRouter() { return router_; }
 
-    /// 鍐荤粨鎵€鏈夊鐞嗗櫒鏄犲皠涓哄彧璇诲師瀛愬揩鐓?
-    /// 蹇呴』鍦ㄦ墍鏈塛orker鐨処nitLua()鍜屾墍鏈塕egister/Listen璋冪敤涔嬪悗璋冪敤
-    /// 浣嗗繀椤诲湪浠讳綍缃戠粶娑堟伅鍒嗗彂涔嬪墠璋冪敤锛堟甯告祦绋嬩腑锛?
-    /// 璋冪敤Freeze()鍚庯紝FindListenFunction鍜孎indRpcFunction鍙樹负鏃犻攣
+    /// 冻结所有处理器映射为只读原子快照
+    /// 必须在所有Worker的InitLua()和所有Register/Listen调用之后调用
+    /// 但必须在任何网络消息分发之前调用（正常流程中）
+    /// 调用Freeze()后，FindListenFunction和FindRpcFunction变为无锁
     void Freeze();
 
 private:
@@ -126,8 +126,8 @@ private:
     std::mutex listen_mutex_;
     std::mutex rpc_interface_mutex_;
 
-    /// 鍐荤粨鐨勫彧璇诲揩鐓?鈥?鐢盕reeze()濉厖涓€娆★紝涔嬪悗鏃犻攣璇诲彇
-    /// 鐢熷懡鍛ㄦ湡锛氬湪Freeze()鏈熼棿鍒嗛厤涓€娆★紝姘镐笉閲婃斁锛堟湁鎰忎负涔?鈥?杩涚▼鐢熷懡鍛ㄦ湡锛?
+    /// 冻结的只读快照——由Freeze()填充一次，之后无锁读取
+    /// 生命周期：在Freeze()期间分配一次，永不释放（有意为之——进程生命周期）
     std::atomic<const ListenMap*>    frozen_listen_map_{nullptr};
     std::atomic<const RpcInterfaceMap*> frozen_rpc_interface_map_{nullptr};
 
