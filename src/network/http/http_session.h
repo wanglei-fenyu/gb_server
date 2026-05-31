@@ -13,7 +13,6 @@ namespace beast_http = boost::beast::http;
 
 namespace gb
 {
-struct HttpServer::Impl;
 
 /// HTTP会话（非SSL）。
 class HttpSession : public std::enable_shared_from_this<HttpSession>
