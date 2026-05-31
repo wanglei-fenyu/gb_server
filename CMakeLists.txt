@@ -32,7 +32,7 @@ find_package(RapidJSON  REQUIRED)
 find_package(rapidxml REQUIRED)
 find_package(sol2 REQUIRED)
 find_package(cxxopts REQUIRED)
-find_package(libpq REQUIRED)
+find_package(PostgreSQL REQUIRED)
 
 # 定义全局编译宏
 add_compile_definitions(
