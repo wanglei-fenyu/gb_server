@@ -38,6 +38,8 @@ add_compile_definitions(
     # PROTOBUF_USE_DLLS  # 静态链接 protobuf 时不需要
     BOOST_ASIO_HAS_STD_THREAD
     BOOST_CHARCONV_DISABLE_FLOAT128
+    BOOST_BIND_GLOBAL_PLACEHOLDERS
+    _CPPUNWIND  # 显式启用异常处理，防止 Boost 定义 BOOST_NO_EXCEPTIONS
 )
 
 # 设置静态库和动态库的输出目录
@@ -48,3 +50,8 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
 # add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
 add_subdirectory(test/server_test)
 add_subdirectory(test/client_test)
+
+# Game server processes
+add_subdirectory(server/login_server)
+add_subdirectory(server/gateway_server)
+add_subdirectory(server/scene_server)

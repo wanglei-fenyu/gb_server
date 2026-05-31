@@ -1,6 +1,27 @@
 <root>
-    <win_tcp ip ="127.0.0.1" port="99899" />
-    <linux_tcp ip ="127.0.0.1" port="99899"/>
-    <win_http ip ="127.0.0.1" port="8888" />
-    <linux_http ip ="127.0.0.1" port="8080"/>
+    <!-- default/legacy entry (for server_test) -->
+    <win_tcp ip="127.0.0.1" port="99899" />
+    <linux_tcp ip="127.0.0.1" port="99899"/>
+    <win_http ip="127.0.0.1" port="8888" />
+    <linux_http ip="127.0.0.1" port="8080"/>
+
+    <!-- Login Server -->
+    <login>
+        <win_tcp ip="127.0.0.1" port="10001"/>
+        <linux_tcp ip="127.0.0.1" port="10001"/>
+        <win_http ip="127.0.0.1" port="20001"/>
+        <linux_http ip="127.0.0.1" port="20001"/>
+    </login>
+
+    <!-- Gateway Server -->
+    <gateway>
+        <win_tcp ip="127.0.0.1" port="10002"/>
+        <linux_tcp ip="127.0.0.1" port="10002"/>
+    </gateway>
+
+    <!-- Scene Server -->
+    <scene>
+        <win_tcp ip="127.0.0.1" port="10003"/>
+        <linux_tcp ip="127.0.0.1" port="10003"/>
+    </scene>
 </root>
