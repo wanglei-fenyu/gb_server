@@ -120,14 +120,14 @@ void ShutdownManager::AdvancePhase()
                 LOG_INFO("Entering Phase 1: StoppingIO - stopping IO threads from accepting new messages");
                 break;
             case ShutdownPhase::StoppingIO:
-                next = ShutdownPhase::ProcessingTasks;
-                LOG_INFO("Entering Phase 2: ProcessingTasks - processing all pending tasks");
-                break;
-            case ShutdownPhase::ProcessingTasks:
                 next = ShutdownPhase::CompletingTimers;
-                LOG_INFO("Entering Phase 3: CompletingTimers - completing current timer frame (cancelling others)");
+                LOG_INFO("Entering Phase 2: CompletingTimers - completing current timer frame (cancelling others)");
                 break;
             case ShutdownPhase::CompletingTimers:
+                next = ShutdownPhase::ProcessingTasks;
+                LOG_INFO("Entering Phase 3: ProcessingTasks - processing all pending tasks");
+                break;
+            case ShutdownPhase::ProcessingTasks:
                 next = ShutdownPhase::Cleaning;
                 LOG_INFO("Entering Phase 4: Cleaning - cleaning up resources");
                 break;
@@ -153,14 +153,14 @@ void ShutdownManager::AdvancePhase()
                     on_stop_io_(next);
                 break;
             case ShutdownPhase::StoppingIO:
-                if (on_process_tasks_)
-                    on_process_tasks_(next);
-                break;
-            case ShutdownPhase::ProcessingTasks:
                 if (on_complete_timers_)
                     on_complete_timers_(next);
                 break;
             case ShutdownPhase::CompletingTimers:
+                if (on_process_tasks_)
+                    on_process_tasks_(next);
+                break;
+            case ShutdownPhase::ProcessingTasks:
                 if (on_cleanup_)
                     on_cleanup_(next);
                 break;

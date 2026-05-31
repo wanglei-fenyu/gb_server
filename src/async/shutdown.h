@@ -13,8 +13,8 @@ namespace gb
  * 优雅关闭管理器，协调所有线程的有序关闭
  * 顺序：
  *   1. 停止接受新连接（IO线程）
- *   2. 处理worker中所有待处理任务
- *   3. 完成当前定时器帧（取消其他）
+ *   2. 完成当前定时器帧（取消其他）
+ *   3. 处理worker中所有待处理任务
  *   4. 按逆序清理资源（worker、IO线程、主线程）
  */
 class ShutdownManager
@@ -24,8 +24,8 @@ public:
     {
         Normal           = 0, // 正常运行
         StoppingIO       = 1, // IO线程停止接收，完成待处理操作
-        ProcessingTasks  = 2, // Worker处理所有待处理任务
-        CompletingTimers = 3, // 定时器完成当前帧（取消其他）
+        CompletingTimers = 2, // 定时器完成当前帧（取消其他）
+        ProcessingTasks  = 3, // Worker处理所有待处理任务
         Cleaning         = 4, // 所有线程清理并退出
         Done             = 5  // 关闭完成
     };
