@@ -40,6 +40,7 @@ macro(conan_link_libraries target_name)
         rapidxml::rapidxml
         sol2::sol2
         cxxopts::cxxopts
+        libpq::libpq
     )
 endmacro()
 
