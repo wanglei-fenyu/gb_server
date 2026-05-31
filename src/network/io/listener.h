@@ -8,7 +8,7 @@ namespace gb
 class Listener : public std::enable_shared_from_this<Listener>
 {
     using callback_t = std::function<void(SessionPtr)>;     
-    using fail_callback_t = std::function<void(NET_ErrorCode,std::string_view /*鍘熷洜*/)>;
+    using fail_callback_t = std::function<void(NET_ErrorCode,std::string_view /*原因*/)>;
 
 public:
 	static const int LISTEN_MAX_CONNECTIONS = 4096;

@@ -8,22 +8,22 @@ namespace gb
 
 struct ServerOptions
 {
-    //int work_thread_num;        //缃戠粶澶勭悊绾跨▼鏁?
-    int max_connection_count;   //鍏佽鐨勬渶澶ц繛鎺ユ暟閲? -1娌℃湁闄愬埗
-    int keep_alive_time;        //淇濇寔杩炴帴鐨勬椂闂?-1娌℃湁闄愬埗
-    int max_pending_buffer_size;//涓€涓繛鎺ョ瓑寰呭彂閫侀槦鍒楁渶澶х紦鍐插尯 鍗曚綅MB  0琛ㄧず娌℃湁缂撳啿鍖?榛樿100MB
+    //int work_thread_num;        //网络处理线程数
+    int max_connection_count;   //允许的最大连接数量 -1没有限制
+    int keep_alive_time;        //保持连接的时间 -1没有限制
+    int max_pending_buffer_size;//一个连接等待发送队列最大缓冲区 单位MB 0表示没有缓冲区 默认100MB
 
-    //缃戠粶鍚炲悙 -1琛ㄧず娌℃湁闄愬埗
+    //网络吞吐 -1表示没有限制
     int max_throughput_in;
     int max_throughput_out;
     
-    size_t io_service_pool_size; //瀹為檯缃戠粶澶勭悊绾跨▼鏁?
+    size_t io_service_pool_size; //实际网络处理线程数
 
-    //涓€涓熀鏈潡64B  榛樿鏄?  鏃堕棿鍐呭瓨澶у皬  64<<4 1024B
+    //一个基本块64B 默认是 4 64<<4 1024B
     size_t write_buffer_base_block_factor;
     size_t read_buffer_base_block_factor;  
     
-    bool no_delay;  //榛樿true  
+    bool no_delay;  //默认true  
 
 	ServerOptions()
 	//: work_thread_num(8)
@@ -44,7 +44,7 @@ struct ServerOptions
 class ServerImpl :public std::enable_shared_from_this<ServerImpl>
 {
 public:
-    inline static const int MAINTAIN_INTERVAL_IN_MS = 100;     //缁存姢闂撮殧 100ms
+    inline static const int MAINTAIN_INTERVAL_IN_MS = 100;     //维护间隔 100ms
 
 public:
     ServerImpl(const ServerOptions& options);

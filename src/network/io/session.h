@@ -65,12 +65,12 @@ private:
 
 struct FlowControlItem
 {
-	int token; // always <= 0
+	int token; // 总是 <= 0
 	Session* session;
 	
 	FlowControlItem(int t, Session* s) : token(t), session(s) {}
 
-	// closer to zero => higher priority
+	// 越接近0优先级越高
 	bool operator<(const FlowControlItem& o) const 
 	{
 		return token > o.token;

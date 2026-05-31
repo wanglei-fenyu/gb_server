@@ -7,18 +7,18 @@ namespace gb
 {
 struct ClientOptions
 {
-    int work_thread_num;        //缃戠粶澶勭悊绾跨▼鏁?
+    int work_thread_num;        //网络处理线程数
     int callback_thread_num;
-    int keep_alive_time;        //淇濇寔杩炴帴鐨勬椂闂?-1娌℃湁闄愬埗
-    int max_pending_buffer_size;//涓€涓繛鎺ョ瓑寰呭彂閫侀槦鍒楁渶澶х紦鍐插尯 鍗曚綅MB  0琛ㄧず娌℃湁缂撳啿鍖?榛樿100MB
+    int keep_alive_time;        //保持连接的时间 -1没有限制
+    int max_pending_buffer_size;//一个连接等待发送队列最大缓冲区 单位MB 0表示没有缓冲区 默认100MB
 
-    //缃戠粶鍚炲悙 -1琛ㄧず娌℃湁闄愬埗
+    //网络吞吐 -1表示没有限制
     int max_throughput_in;
     int max_throughput_out;
     
-    int connect_timeout;  //杩炴帴瓒呮椂鏃堕棿锛?1琛ㄧず娌℃湁闄愬埗
+    int connect_timeout;  //连接超时时间，-1表示没有限制
     
-    bool no_delay;  //榛樿true  
+    bool no_delay;  //默认true  
 
 	ClientOptions()
 	: work_thread_num(4)
