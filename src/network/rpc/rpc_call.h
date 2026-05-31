@@ -12,7 +12,7 @@ namespace gb
 {
 class Worker;
 
-constexpr int64_t kRpcdefaultTimeout = 1000 * 5; // 5绉?
+constexpr int64_t kRpcdefaultTimeout = 1000 * 5; // 5秒
 
 typedef rpc_listen_fun rpc_done_call;
 
@@ -24,7 +24,7 @@ enum class RpcErrorCode {
     InvalidRequest = 3,
 };
 
-// 鍐呴儴鐢熷懡鍛ㄦ湡鐘舵€?鈥?鏇夸唬鍘熸潵鐨勪笁涓嫭绔嬪師瀛愬彉閲?
+// 内部生命周期状态 — 替代原来的三个独立原子变量
 enum class RpcState : uint8_t {
     Pending = 0,
     Completed,

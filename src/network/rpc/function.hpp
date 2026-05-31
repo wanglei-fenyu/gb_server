@@ -20,14 +20,14 @@ typedef std::function<void(const SessionPtr& session, const ReadBufferPtr& buffe
 
 
 // ---------------------------------------------------------------------------
-// MakeNetHandler 鈥?unified network message handler factory
+// MakeNetHandler — 统一的网络消息处理器工厂
 //
-// Supports any callable with 0, 1, or 2 parameters:
-//   鈥?0 params                     : fn()
-//   鈥?(SessionPtr)                 : fn(session)
-//   鈥?(ProtoMsg)                   : fn(msg)          鈥?parsed with compression
-//   鈥?(SessionPtr, ProtoMsg)       : fn(session, msg) 鈥?parsed with compression
-//   鈥?(ProtoMsg0, ProtoMsg1)       : fn(meta, msg0)   鈥?parsed with compression
+// 支持0、1或2个参数的可调用对象：
+//   — 0个参数                     : fn()
+//   — (SessionPtr)                 : fn(session)
+//   — (ProtoMsg)                   : fn(msg)          — 带压缩解析
+//   — (SessionPtr, ProtoMsg)       : fn(session, msg) — 带压缩解析
+//   — (ProtoMsg0, ProtoMsg1)       : fn(meta, msg0)   — 带压缩解析
 // ---------------------------------------------------------------------------
 template <typename F>
 net_listen_fun MakeNetHandler(F fn)
@@ -103,7 +103,7 @@ fn(meta, std::move(p0));
 
 
 // ---------------------------------------------------------------------------
-// NetFunctionaTraits 鈥?kept only for the sol::function (Lua) specialisation
+// NetFunctionaTraits — 仅保留用于 sol::function (Lua) 的特化
 // ---------------------------------------------------------------------------
 template <class Fn, class F = Fn>
 struct NetFunctionaTraits
@@ -177,7 +177,7 @@ static const bool value = sizeof(HasFunc<T>(nullptr)) == sizeof(yes);
 
 
 // ---------------------------------------------------------------------------
-// ServerLambdaFunc 鈥?backward-compatible helper, delegates to MakeNetHandler
+// ServerLambdaFunc — 向后兼容的辅助函数，委托给 MakeNetHandler
 // ---------------------------------------------------------------------------
 template <typename T, typename F>
 static net_listen_fun ServerLambdaFunc(T lambda, F)

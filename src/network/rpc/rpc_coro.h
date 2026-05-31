@@ -140,8 +140,8 @@ public:
 
     bool await_suspend(std::coroutine_handle<> handle)
     {
-        // 鍦ㄨ皟鐢╞inder涔嬪墠鎹曡幏褰撳墠鎵ц鍣紝浠ヤ究浠讳綍
-        // 鍚屾瀹屾垚鏃朵粛鑳芥壘鍒版湁鏁堢殑鎵ц鍣ㄥ紩鐢ㄣ€?
+        // 在调用binder之前捕获当前执行器，以便任何
+        // 同步完成时仍能找到有效的执行器引用。
         state_->Bind(handle, WorkerExecutor::Current(true));
         binder_(state_);
         return !state_->FinishSuspend();

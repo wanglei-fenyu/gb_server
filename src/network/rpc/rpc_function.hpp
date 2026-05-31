@@ -19,7 +19,7 @@ typedef std::function<void(const SessionPtr& session, const ReadBufferPtr& buffe
 
 
 // ---------------------------------------------------------------------------
-// msgpack_unpack_tuple<Tuple>(data, size) 鈥?unpack a tuple of types via msgpack
+// msgpack_unpack_tuple<Tuple>(data, size) — 通过msgpack解包元组
 // ---------------------------------------------------------------------------
 namespace detail
 {
@@ -39,12 +39,12 @@ auto msgpack_unpack_tuple(const uint8_t* data, std::size_t size)
 
 
 // ---------------------------------------------------------------------------
-// MakeRpcHandler 鈥?unified RPC handler factory
+// MakeRpcHandler — 统一的RPC处理器工厂
 //
-// Supports any callable with up to N parameters of the following kinds:
-//   鈥?RpcReply  as the first parameter (optional, triggers reply routing)
-//   鈥?google::protobuf::Message derivatives (parsed from the zero-copy stream)
-//   鈥?any msgpack-serialisable type (unpacked via gb::msgpack::unpack)
+// 支持以下类型的可调用对象：
+//   — RpcReply 作为第一个参数（可选，触发回复路由）
+//   — google::protobuf::Message 派生类（从零拷贝流解析）
+//   — 任何 msgpack 可序列化类型（通过 gb::msgpack::unpack 解包）
 // ---------------------------------------------------------------------------
 template <typename F>
 rpc_listen_fun MakeRpcHandler(F f)
@@ -70,7 +70,7 @@ rpc_listen_fun MakeRpcHandler(F f)
 				}
 				else if constexpr (N == 2 && std::is_base_of_v<google::protobuf::Message, std::tuple_element_t<1, ArgsTuple>>)
 				{
-					// f(RpcReply, ProtoMsg) 鈥?parse second arg from stream
+					// f(RpcReply, ProtoMsg) — 从流中解析第二个参数
 					using P1 = std::tuple_element_t<1, ArgsTuple>;
 					P1 p1;
 					if (p1.ParsePartialFromZeroCopyStream(buffer.get()))
@@ -78,7 +78,7 @@ rpc_listen_fun MakeRpcHandler(F f)
 				}
 				else
 				{
-					// f(RpcReply, T1, T2, ...) 鈥?msgpack-unpack remaining args
+					// f(RpcReply, T1, T2, ...) — msgpack解包剩余参数
 					using TailTuple = tuple_tail_t<1, ArgsTuple>;
 					std::string s;
 					GetMsgData(meta, buffer, meta_size, data_size, s);
@@ -92,14 +92,14 @@ rpc_listen_fun MakeRpcHandler(F f)
 			}
 			else if constexpr (N == 1 && std::is_base_of_v<google::protobuf::Message, P0>)
 			{
-				// f(ProtoMsg) 鈥?single protobuf arg
+				// f(ProtoMsg) — 单个protobuf参数
 				P0 p0;
 				if (p0.ParsePartialFromZeroCopyStream(buffer.get()))
 					f(std::move(p0));
 			}
 			else
 			{
-				// f(T0, T1, ...) 鈥?msgpack-unpack all args
+				// f(T0, T1, ...) — msgpack解包所有参数
 				std::string s;
 				GetMsgData(meta, buffer, meta_size, data_size, s);
 				auto result = msgpack_unpack_tuple<ArgsTuple>((uint8_t*)s.data(), s.size());
@@ -115,7 +115,7 @@ rpc_listen_fun MakeRpcHandler(F f)
 
 
 // ---------------------------------------------------------------------------
-// RpcFunctionaTraits 鈥?kept only for the sol::function (Lua) specialisation
+// RpcFunctionaTraits — 仅保留用于 sol::function (Lua) 的特化
 // ---------------------------------------------------------------------------
 template <class Fn, class F = Fn>
 struct RpcFunctionaTraits
@@ -161,7 +161,7 @@ struct RpcFunctionaTraits<sol::function, sol::function>
 
 
 // ---------------------------------------------------------------------------
-// RpcLambdaFunc 鈥?backward-compatible helper, delegates to MakeRpcHandler
+// RpcLambdaFunc — 向后兼容的辅助函数，委托给 MakeRpcHandler
 // ---------------------------------------------------------------------------
 template <typename T, typename F>
 static rpc_listen_fun RpcLambdaFunc(T lambda, F)

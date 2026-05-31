@@ -75,7 +75,7 @@ void RpcCall::Cancel()
     if (!state_.compare_exchange_strong(expected, RpcState::Cancelled, std::memory_order_acq_rel, std::memory_order_acquire))
         return;
 
-    // 浠庣嚎绋嬫湰鍦版寕璧锋槧灏勪腑绉婚櫎锛圕ancel蹇呴』鍦ㄦ墍灞濿orker绾跨▼涓皟鐢級
+    // 从线程本地挂起映射中移除（Cancel必须在所属Worker线程中调用）
     Worker::TakePendingRpc(local_seq_);
 
     std::function<void()> cancel_callback;
@@ -113,15 +113,15 @@ void RpcCall::Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta&
         std::lock_guard<std::mutex> lock(callback_mutex_);
         callback = done_call_bcak_;
     }
-    // 鐩存帴鍦ㄥ綋鍓峎orker绾跨▼涓婅皟鐢ㄥ洖璋冦€?
-    // 涓嶉渶瑕丏ispatchCompletion 鈥?Done()濮嬬粓浠庢墍灞濿orker璋冪敤
-    // 锛圛O绾跨▼灏嗗搷搴旀姇閫掑埌姝orker锛學orker鍦ㄧ嚎绋嬫湰鍦版槧灏勪笂璋冪敤TakePendingRpc锛?
-    //  鐒跺悗鍐呰仈璋冪敤Done()锛夈€?
+    // 直接在当前Worker线程上调用回调。
+    // 不需要DispatchCompletion — Done()始终从所属Worker调用
+    // （IO线程将响应投递到此Worker，Worker在线程本地映射上调用TakePendingRpc，
+    //  然后内联调用Done()）。
     //
-    // 鍥炶皟锛堜緥濡侻akeRpcHandler鐨刲ambda锛夎皟鐢╯tate->Complete(value)
-    // 鎴杝tate->Resume()锛屽悗鑰呰皟鐢∟otifyCompleted() 鈫?executor_.schedule([h](){h.resume();})銆?
-    // 鐢变簬executor_鏄粦瀹氬埌鍚屼竴Worker鐨刉orkerExecutor锛屽叾IsCurrent()
-    // 杩斿洖true锛屽洜姝.resume()鍐呰仈鎵ц 鈥?闆朵笂涓嬫枃鍒囨崲銆?
+    // 回调（例如MakeRpcHandler的lambda）调用state->Complete(value)
+    // 或state->Resume()，后者调用NotifyCompleted() → executor_.schedule([h](){h.resume();})。
+    // 由于executor_是绑定到同一Worker的WorkerExecutor，其IsCurrent()
+    // 返回true，因此h.resume()内联执行 — 零上下文切换。
     if (callback)
         callback(session, buffer, meta, meta_size, data_size);
 }
@@ -149,7 +149,7 @@ void RpcCall::StartTimer()
         RpcState expected = RpcState::Pending;
         if (!state_.compare_exchange_strong(expected, RpcState::InvalidRequest, std::memory_order_acq_rel, std::memory_order_acquire))
             return;
-        // 娓呯悊锛氫粠鎵€灞濿orker鐨勭嚎绋嬫湰鍦版槧灏勪腑绉婚櫎骞惰皟鐢ㄥ彇娑堝洖璋?
+        // 清理：从所属Worker的线程本地映射中移除并调用取消回调
         Worker::TakePendingRpc(local_seq_);
         std::function<void()> cancel_callback;
         {
@@ -170,14 +170,14 @@ void RpcCall::StartTimer()
 
         LOG_WARN("RPC timeout {}", self->id_);
 
-        // 瓒呮椂鍦↖O绾跨▼涓婅Е鍙?鈥?鏃犳硶鐩存帴璁块棶Worker鐨勭嚎绋嬫湰鍦版槧灏勩€?
-        // 鎶曢€掑埌鎵€灞濿orker浠ヤ究瀹夊叏鍦颁粠鍏舵寕璧锋槧灏勪腑绉婚櫎銆?
+        // 超时在IO线程上触发 — 无法直接访问Worker的线程本地映射。
+        // 投递到所属Worker以便安全地从其挂起映射中移除。
         auto worker = WorkerManager::Instance()->GetWorker(self->worker_index_);
         if (!worker)
             return;
 
         worker->Post([self]() {
-            // 浠庣嚎绋嬫湰鍦版槧灏勪腑绉婚櫎锛堝湪鎵€灞濿orker绾跨▼涓婂畨鍏ㄦ墽琛岋級
+            // 从线程本地映射中移除（在所属Worker线程上安全执行）
             Worker::TakePendingRpc(self->local_seq_);
 
             std::function<void()> timeout_callback;
