@@ -11,6 +11,10 @@ cmake_policy(SET CMP0144 NEW)
 # 创建可执行文件
 add_executable(${TARGET_NAME})
 
+if(MSVC)
+    target_compile_options(${TARGET_NAME} PRIVATE /bigobj)
+endif()
+
 # ========== 编译宏定义 ==========
 # protobuf 使用动态库
 add_definitions(-DPROTOBUF_USE_DLLS)

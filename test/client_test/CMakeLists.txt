@@ -1,6 +1,11 @@
 cmake_policy(SET CMP0144 NEW)
 set(TARGET_NAME client_test)
 add_executable(${TARGET_NAME})
+
+if(MSVC)
+    target_compile_options(${TARGET_NAME} PRIVATE /bigobj)
+endif()
+
 add_definitions(-DPROTOBUF_USE_DLLS)  # protobuf使用动态库
 add_compile_definitions(BOOST_ASIO_HAS_STD_THREAD) # asio使用std::thread
 
