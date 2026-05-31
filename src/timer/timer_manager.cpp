@@ -12,7 +12,7 @@ void TimerManager::Update()
         auto timer = steady_timers_.top();
         if (!timer->active_) {
             steady_timers_.pop();
-            all_timers_.erase(timer->Id());  //鍒犻櫎
+            all_timers_.erase(timer->Id());  //删除
             continue;
         }
 
@@ -21,9 +21,9 @@ void TimerManager::Update()
             (*timer)();
             if (timer->IsLoop()) {
                 timer->Reset();
-                steady_timers_.push(timer); // 閲嶆柊鍔犲叆寰幆瀹氭椂鍣?
+                steady_timers_.push(timer); // 重新加入循环定时器
             } else {
-                all_timers_.erase(timer->Id()); // 浠庡叏灞€绠＄悊涓垹闄?
+                all_timers_.erase(timer->Id()); // 从全局管理中删除
             }
         } 
         else {
@@ -45,9 +45,9 @@ void TimerManager::Update()
             (*timer)();
             if (timer->IsLoop()) {
                 timer->Reset();
-                system_timers_.push(timer); // 閲嶆柊鍔犲叆寰幆瀹氭椂鍣?
+                system_timers_.push(timer); // 重新加入循环定时器
             } else {
-                all_timers_.erase(timer->Id()); // 浠庡叏灞€绠＄悊涓垹闄?
+                all_timers_.erase(timer->Id()); // 从全局管理中删除
             }
         } 
         else {
@@ -63,7 +63,7 @@ int64_t TimerManager::RegisterTimer(int64_t milliseconds, std::function<void()>&
 
 int64_t TimerManager::RegisterTimer(std::chrono::milliseconds time, std::function<void()>&& callFunc, bool loop /*= false*/)
 {
-    // 鍏抽棴鏈熼棿鎷掔粷鏂扮殑瀹氭椂鍣ㄦ敞鍐?
+    // 关闭期间拒绝新的定时器注册
     if (shutting_down_.load())
     {
         return -1;
@@ -83,7 +83,7 @@ int64_t TimerManager::RegisterSystemTimer(int64_t milliseconds, std::function<vo
 
 int64_t TimerManager::RegisterSystemTimer(std::chrono::milliseconds time, std::function<void()>&& callFunc, bool loop /*= false*/)
 {
-    // 鍏抽棴鏈熼棿鎷掔粷鏂扮殑瀹氭椂鍣ㄦ敞鍐?
+    // 关闭期间拒绝新的定时器注册
     if (shutting_down_.load())
     {
         return -1;
@@ -100,7 +100,7 @@ void TimerManager::UnRegisterTimer(int64_t timerId)
 {
 	 auto it = all_timers_.find(timerId);
         if (it != all_timers_.end()) {
-            it->second->Cancel(); //鍏堟爣璁颁负澶辨晥
+            it->second->Cancel(); //先标记为失效
             //all_timers_.erase(it);
         }
 }
@@ -116,7 +116,7 @@ void TimerManager::EnterShutdownMode()
     shutting_down_.store(true);
     LOG_INFO("TimerManager entering shutdown mode - completing current frame timers, cancelling future ones");
     
-    // 鍙栨秷鎵€鏈夋湭杩囨湡鐨勫畾鏃跺櫒浠ラ槻姝㈠畠浠璋冨害
+    // 取消所有未过期的定时器以防止它们被调度
     for (auto& [id, timer] : all_timers_)
     {
         if (!timer->IsExpired() && timer->active_)

@@ -69,6 +69,10 @@ public:
 	bool IsMainWorker() const { return worker_type_ == WorkerType::MAIN; }
 
 public:
+    /// 设置帧率（默认 60fps）
+    void SetFrameRate(int fps);
+
+public:
     std::unique_ptr<TimerManager>& GetTimerManager();
     std::shared_ptr<WorkerExecutor> GetExecutor() const;
     async_simple::Executor* getAsyncSimpleExecutor() const;
@@ -110,6 +114,9 @@ private:
     std::shared_ptr<WorkerExecutor> executor_;
     std::shared_ptr<GbAsyncExecutor> async_executor_;
     std::atomic<uint32_t> rpc_seq_counter_{1};
+
+    /// 帧时长（默认 16ms ≈ 60fps）
+    std::chrono::milliseconds frame_duration_{16};
 };
 
 using WorkerPtr = std::shared_ptr<Worker>;

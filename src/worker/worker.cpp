@@ -10,8 +10,8 @@ namespace gb
 
 namespace
 {
-/// 绾跨▼鏈湴鐨勫緟澶勭悊RPC璋冪敤鈥斺€斾粎鐢辨墍灞濿orker绾跨▼璁块棶銆?
-/// 姣忎釜Worker鍦ㄦ瀛樺偍鑷繁鐨勪紶鍑篟PC璋冪敤锛屽洜姝や笉闇€瑕侀攣銆?
+/// 线程本地的待处理RPC调用——仅由所属Worker线程访问。
+/// 每个Worker在此存储自己的传出RPC调用，因此不需要锁。
 thread_local std::unordered_map<uint32_t, RpcCallPtr> tls_pending_rpcs;
 } // anonymous namespace
 Worker::Worker(WorkerType type)
@@ -53,11 +53,12 @@ void Worker::OnStart()
 
 void Worker::Run()
 {
-    auto last_time = std::chrono::steady_clock::now();
+    auto last_frame_time = std::chrono::steady_clock::now();
     while (true)
     {
         if (!runing_.load())
         {
+            // 优雅关闭：退出前处理完剩余任务
             std::function<void()> func;
             if (!events_.try_dequeue(func))
                 break;
@@ -66,14 +67,24 @@ void Worker::Run()
             continue;
         }
 
-        std::unique_lock<std::mutex> lk(event_mutex_);
-        event_cv_.wait_for(lk, std::chrono::milliseconds(50), [this]() { return !runing_.load() || events_.size_approx() > 0; });
-        lk.unlock();
+        // 计算自上一帧以来的时间
+        auto                        frame_start = std::chrono::steady_clock::now();
+        std::chrono::duration<float> elapsed    = frame_start - last_frame_time;
+        last_frame_time                        = frame_start;
 
-		auto                         current_time = std::chrono::steady_clock::now();
-		std::chrono::duration<float> elapsed      = current_time - last_time;
-		last_time                                 = current_time;
         ProcessFrame(elapsed.count());
+
+        // 帧率控制：等待剩余帧时间
+        // cv notify_one（来自 EnqueueTask）提前唤醒以立即处理任务
+        auto frame_time = std::chrono::steady_clock::now() - frame_start;
+        auto remaining  = frame_duration_ - frame_time;
+        if (remaining > std::chrono::milliseconds::zero())
+        {
+            std::unique_lock<std::mutex> lk(event_mutex_);
+            event_cv_.wait_for(lk, remaining, [this]() {
+                return !runing_.load() || events_.size_approx() > 0;
+            });
+        }
     }
 }
 
@@ -81,6 +92,12 @@ void Worker::ProcessFrame(float elapsed)
 {
     OnUpdate(elapsed);
     OnTick();
+}
+
+void Worker::SetFrameRate(int fps)
+{
+    if (fps > 0)
+        frame_duration_ = std::chrono::milliseconds(1000 / fps);
 }
 
 void Worker::Stop()
