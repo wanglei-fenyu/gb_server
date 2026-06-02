@@ -38,5 +38,3 @@ function hello(session,message)
     --net.Send(session,1,2,"TestMsg",message)
 end
 net.Listen(1,hello,"TestMsg")
-
-require("test_db")

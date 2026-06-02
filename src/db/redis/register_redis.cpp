@@ -7,9 +7,21 @@
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 全局 Redis 连接池（所有 Worker 共享）
+//
+// ⚠️ 堆分配 + 永不销毁 — 避免静态析构顺序问题。
+// 程序退出时由 OS 回收，连接在受控关闭阶段通过 CloseRedisPool() 提前关闭。
 // ═════════════════════════════════════════════════════════════════════════════
 
-static RedisConnectionPool g_redis_pool;
+static RedisConnectionPool& GetRedisPool()
+{
+    static RedisConnectionPool* pool = new RedisConnectionPool();
+    return *pool;
+}
+
+void CloseRedisPool()
+{
+    GetRedisPool().CloseAll();
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 泛型命令辅助函数 — RESP3 → Lua 类型转换
@@ -110,7 +122,11 @@ static auto GenericRespToLua(lua_State* L,
     return obj_pair.first;
 }
 
-static std::once_flag g_redis_init_flag;
+static std::once_flag& GetRedisInitFlag()
+{
+    static std::once_flag flag;
+    return flag;
+}
 
 /// 从 Lua config table 解析 RedisConfig。
 static RedisConfig ParseConfig(const sol::table& cfg)
@@ -136,13 +152,13 @@ static RedisConfig ParseConfig(const sol::table& cfg)
 /// 从 Lua 获取连接（内部辅助）。
 static RedisConnection* GetConn()
 {
-    std::call_once(g_redis_init_flag, []() {
+    std::call_once(GetRedisInitFlag(), []() {
         RedisConfig default_cfg;
         LOG_WARN("redis.Connect() not called, using default config {}:{}",
                  default_cfg.host, default_cfg.port);
-        g_redis_pool.Init(default_cfg);
+        GetRedisPool().Init(default_cfg);
     });
-    return g_redis_pool.GetConnection();
+    return GetRedisPool().GetConnection();
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -354,17 +370,17 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
     redis["Connect"] = [](sol::table cfg) -> bool {
         RedisConfig config = ParseConfig(cfg);
         bool        ok     = false;
-        std::call_once(g_redis_init_flag, [&]() {
-            ok = g_redis_pool.Init(config);
+        std::call_once(GetRedisInitFlag(), [&]() {
+            ok = GetRedisPool().Init(config);
         });
         if (!ok)
-            ok = g_redis_pool.IsHealthy();
+            ok = GetRedisPool().IsHealthy();
         return ok;
     };
 
     /// redis.IsHealthy() → boolean
     redis["IsHealthy"] = []() -> bool {
-        return g_redis_pool.IsHealthy();
+        return GetRedisPool().IsHealthy();
     };
 
     // ═══════════════════════════════════════════════════════════════════════

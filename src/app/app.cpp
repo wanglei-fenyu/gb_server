@@ -6,6 +6,7 @@
 #include "network/manager/network_manager.h"
 #include <thread>
 #include "base/res_path.h"
+#include "db/redis/register_redis.h"
 
 
 App::App(int argc, char* argv[])  : runding_(false), frame_duration_(std::chrono::milliseconds(16))
@@ -170,6 +171,9 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
     {
         LOG_ERROR("OnCleanup failed");
     }
+
+    // 在 Worker 线程 join 前关闭 Redis 连接池（释放 IO 线程）
+    CloseRedisPool();
 
     LOG_INFO("Cleaning up worker threads");
     auto workers = gb::WorkerManager::Instance()->GetWorkers();

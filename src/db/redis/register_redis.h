@@ -24,3 +24,7 @@
 /// @endcode
 /// 所有异步回调约定：callback(err, ...)，err="" 表示成功。
 void register_redis(std::shared_ptr<Script>& scriptPtr);
+
+/// 在受控关闭阶段关闭 Redis 连接池（释放 IO 线程等资源）。
+/// 应在 Worker 任务排空后、Worker 线程 join 前调用。
+void CloseRedisPool();
