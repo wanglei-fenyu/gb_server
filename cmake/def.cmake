@@ -43,11 +43,7 @@ macro(conan_link_libraries target_name)
         libpq::libpq
     )
 
-    # PostgreSQL（系统包，非 Conan 依赖）
-    if(PostgreSQL_FOUND)
-        target_include_directories(${target_name} ${_link_type} ${PostgreSQL_INCLUDE_DIRS})
-        target_link_libraries(${target_name} ${_link_type} ${PostgreSQL_LIBRARIES})
-    endif()
+
 endmacro()
 
 # 环境信息
