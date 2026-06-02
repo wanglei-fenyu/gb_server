@@ -6,8 +6,10 @@
 #include "async_simple/Promise.h"
 #include <libpq-fe.h>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <functional>
 #include <memory>
+#include <queue>
 #include <string>
 
 namespace gb
@@ -56,7 +58,7 @@ public:
     async_simple::coro::Lazy<void>          Commit() override;
     async_simple::coro::Lazy<void>          Rollback() override;
 
-    // ── 异步回调 API（供 Lua 桥接使用，在 PG IO 线程上执行同步操作后回调） ──
+    // ── 异步回调 API（供 Lua 桥接使用，基于 libpq 非阻塞模式 + Asio reactor） ──
 
     /// 异步连接，完成后回调 ok(bool)。
     void AsyncConnect(const DbConfig& cfg, std::function<void(bool)> callback);
@@ -84,16 +86,23 @@ public:
     void AsyncRollback(std::function<void(bool)> callback);
 
 private:
-    // ── 同步操作（在 IO 线程上执行） ──────────────────────────────────────
+    // ── 异步管道（libpq 非阻塞模式 + Asio reactor） ──────────────────────
 
-    /// 同步查询。
-    DbResult SyncQuery(const char* sql);
+    struct AsyncOp;
 
-    /// 参数化同步查询。
-    DbResult SyncExecParams(const char* sql, const std::vector<DbValue>& params);
+    /// 启动一次异步操作（PQsendQuery / PQsendQueryParams）。
+    /// send_fn 在 IO 线程上调用，返回 true 表示发送成功。
+    void StartSend(std::function<bool(PGconn*)> send_fn,
+                   std::function<void(DbResult)> callback);
 
-    /// 同步命令（BEGIN/COMMIT/ROLLBACK）。
-    bool SyncCommand(const char* sql);
+    /// 继续异步管道：flush → consume → getResult 循环。
+    void ContinueOp(std::shared_ptr<AsyncOp> op);
+
+    /// 将 PQsocket() 包装为 Asio tcp::socket（不转移所有权）。
+    std::shared_ptr<boost::asio::ip::tcp::socket> WrapPgSocket();
+
+    /// 完成当前操作，启动队列中下一个。
+    void StartNext();
 
     /// 将 PGresult 解析为 DbResult。
     static DbResult ParseResult(PGresult* res);
@@ -107,6 +116,11 @@ private:
     PGconn*                            conn_        = nullptr;
     DbConfig                           config_;
     bool                               connected_   = false;
+
+    /// 操作队列（确保同一连接上串行执行）。
+    std::queue<std::shared_ptr<AsyncOp>> pending_ops_;
+    /// 当前是否有操作在进行。
+    bool                                 op_active_ = false;
 };
 
 } // namespace gb

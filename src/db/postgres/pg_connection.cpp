@@ -3,11 +3,33 @@
 #include "async_simple/coro/FutureAwaiter.h"
 #include <libpq-fe.h>
 #include <boost/asio/post.hpp>
+#include <boost/system/error_code.hpp>
 #include <cstring>
 #include <sstream>
 
 namespace gb
 {
+
+// =========================================================================
+// AsyncOp 内部结构
+// =========================================================================
+
+struct PgConnection::AsyncOp {
+    using Callback = std::function<void(DbResult)>;
+    using SendFn   = std::function<bool(PGconn*)>;
+
+    SendFn     send_fn;    // 仅入队时使用
+    Callback   callback;
+    bool       flushing = true;   // true = 仍在 flush 阶段
+};
+
+// 为方便函数定义
+using AsyncOpSendFn   = std::function<bool(PGconn*)>;
+using AsyncOpCallback = std::function<void(DbResult)>;
+
+// =========================================================================
+// 构造 / 析构
+// =========================================================================
 
 PgConnection::PgConnection(boost::asio::io_context& io_ctx)
     : io_ctx_(io_ctx)
@@ -20,13 +42,165 @@ PgConnection::~PgConnection()
 }
 
 // =========================================================================
+// 异步管道 — libpq 非阻塞模式 + Boost.Asio reactor
+//
+// 完整流程：
+//   1. PQsendQuery / PQsendQueryParams  → 立即返回（非阻塞）
+//   2. PQflush       → 若返回 1，等待 socket 可写后重试
+//   3. PQconsumeInput → 读取服务端数据
+//   4. PQisBusy      → 若返回 1，等待 socket 可读后重试
+//   5. PQgetResult   → 收集结果（循环）
+//   6. callback(result)
+//   7. StartNext()   → 处理队列中下一个请求
+// =========================================================================
+
+void PgConnection::StartSend(AsyncOpSendFn send_fn, AsyncOpCallback callback)
+{
+    // 已有操作在进行 → 入队等待
+    if (op_active_) {
+        auto op          = std::make_shared<AsyncOp>();
+        op->send_fn      = std::move(send_fn);
+        op->callback     = std::move(callback);
+        op->flushing     = true;
+        pending_ops_.push(std::move(op));
+        return;
+    }
+
+    op_active_ = true;
+
+    if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
+        callback(DbResult::Error("Connection not available"));
+        StartNext();
+        return;
+    }
+
+    auto op         = std::make_shared<AsyncOp>();
+    op->callback    = std::move(callback);
+    op->flushing    = true;
+
+    if (!send_fn(conn_)) {
+        op->callback(DbResult::Error(PQerrorMessage(conn_)));
+        StartNext();
+        return;
+    }
+
+    ContinueOp(std::move(op));
+}
+
+void PgConnection::ContinueOp(std::shared_ptr<AsyncOp> op)
+{
+    auto self = shared_from_this();
+
+    // ── 阶段 1：Flush（确保所有数据已发送） ────────────────────────────
+    if (op->flushing) {
+        int status = PQflush(conn_);
+        if (status == -1) {
+            op->callback(DbResult::Error(PQerrorMessage(conn_)));
+            StartNext();
+            return;
+        }
+        if (status == 1) {
+            // 数据未发完 → 等待 socket 可写
+            auto sock = WrapPgSocket();
+            if (!sock) {
+                op->callback(DbResult::Error("PQsocket failed"));
+                StartNext();
+                return;
+            }
+            sock->async_wait(boost::asio::ip::tcp::socket::wait_write,
+                [this, self, sock, op](const boost::system::error_code& ec) mutable {
+                    sock->release();
+                    if (ec) {
+                        op->callback(DbResult::Error(
+                            "socket write: " + ec.message()));
+                        StartNext();
+                        return;
+                    }
+                    ContinueOp(op);
+                });
+            return;
+        }
+        // Flush 完成 → 进入消费阶段
+        op->flushing = false;
+    }
+
+    // ── 阶段 2：消费输入 ──────────────────────────────────────────────
+    if (PQconsumeInput(conn_) == 0) {
+        op->callback(DbResult::Error(PQerrorMessage(conn_)));
+        StartNext();
+        return;
+    }
+
+    if (PQisBusy(conn_)) {
+        // 结果未就绪 → 等待 socket 可读
+        auto sock = WrapPgSocket();
+        if (!sock) {
+            op->callback(DbResult::Error("PQsocket failed"));
+            StartNext();
+            return;
+        }
+        sock->async_wait(boost::asio::ip::tcp::socket::wait_read,
+            [this, self, sock, op](const boost::system::error_code& ec) mutable {
+                sock->release();
+                if (ec) {
+                    op->callback(DbResult::Error(
+                        "socket read: " + ec.message()));
+                    StartNext();
+                    return;
+                }
+                ContinueOp(op);
+            });
+        return;
+    }
+
+    // ── 阶段 3：收集结果 ──────────────────────────────────────────────
+    DbResult final_result = DbResult::Error("no result");
+    while (PGresult* res = PQgetResult(conn_)) {
+        auto parsed = ParseResult(res);
+        if (parsed.is_ok()) {
+            // 最后一个非错误结果胜出
+            final_result = std::move(parsed);
+        } else if (final_result.is_error()) {
+            // 保留第一个错误
+            final_result = std::move(parsed);
+        }
+        PQclear(res);
+    }
+
+    op->callback(std::move(final_result));
+    StartNext();
+}
+
+std::shared_ptr<boost::asio::ip::tcp::socket> PgConnection::WrapPgSocket()
+{
+    auto sock    = std::make_shared<boost::asio::ip::tcp::socket>(io_ctx_);
+    int pg_sock = PQsocket(conn_);
+    if (pg_sock == -1)
+        return nullptr;
+    sock->assign(boost::asio::ip::tcp::v4(),
+        static_cast<boost::asio::ip::tcp::socket::native_handle_type>(pg_sock));
+    return sock;
+}
+
+void PgConnection::StartNext()
+{
+    op_active_ = false;
+    if (!pending_ops_.empty()) {
+        auto next = std::move(pending_ops_.front());
+        pending_ops_.pop();
+        auto send_fn  = std::move(next->send_fn);
+        auto callback = std::move(next->callback);
+        StartSend(std::move(send_fn), std::move(callback));
+    }
+}
+
+// =========================================================================
 // DbConnection 接口实现
 // =========================================================================
 
 bool PgConnection::ConnectSync(const DbConfig& cfg)
 {
     config_ = cfg;
-    // 关闭旧连接
     if (conn_) {
         PQfinish(conn_);
         conn_ = nullptr;
@@ -100,7 +274,7 @@ async_simple::coro::Lazy<bool> PgConnection::Reset()
 }
 
 // =========================================================================
-// 查询
+// 查询 — 基于异步管道
 // =========================================================================
 
 async_simple::coro::Lazy<DbResult> PgConnection::Query(std::string_view sql)
@@ -112,7 +286,13 @@ async_simple::coro::Lazy<DbResult> PgConnection::Query(std::string_view sql)
     std::string sql_str(sql);
     boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 promise = std::move(promise)]() mutable {
-        promise.setValue(SyncQuery(sql.c_str()));
+        StartSend(
+            [sql = std::move(sql)](PGconn* conn) -> bool {
+                return PQsendQuery(conn, sql.c_str()) == 1;
+            },
+            [promise = std::move(promise)](DbResult result) mutable {
+                promise.setValue(std::move(result));
+            });
     });
 
     co_return co_await std::move(future);
@@ -125,10 +305,81 @@ async_simple::coro::Lazy<DbResult> PgConnection::Query(
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    std::string sql_str(sql);
-    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
-                                params, promise = std::move(promise)]() mutable {
-        promise.setValue(SyncExecParams(sql.c_str(), params));
+    // 准备工作：转换参数（在调用线程上完成）
+    auto sql_str = std::make_shared<std::string>(sql);
+    auto params_copy = std::make_shared<std::vector<DbValue>>(params);
+
+    boost::asio::post(io_ctx_, [this, self, sql_str, params_copy,
+                                promise = std::move(promise)]() mutable {
+        // 将 DbValue 转换为 libpq 参数
+        std::vector<const char*> values;
+        std::vector<int>         lengths;
+        std::vector<int>         formats;
+        std::vector<std::string> temp_strs;
+
+        values.reserve(params_copy->size());
+        lengths.reserve(params_copy->size());
+        formats.reserve(params_copy->size());
+        temp_strs.reserve(params_copy->size());
+
+        for (const auto& p : *params_copy) {
+            formats.push_back(0); // text format
+            if (p.is_null()) {
+                values.push_back(nullptr);
+                lengths.push_back(0);
+            } else {
+                switch (p.type()) {
+                    case DbFieldType::BOOL:
+                        temp_strs.push_back(p.as_bool() ? "t" : "f");
+                        break;
+                    case DbFieldType::INT8:
+                        temp_strs.push_back(std::to_string(p.as_int8()));
+                        break;
+                    case DbFieldType::INT16:
+                        temp_strs.push_back(std::to_string(p.as_int16()));
+                        break;
+                    case DbFieldType::INT32:
+                        temp_strs.push_back(std::to_string(p.as_int32()));
+                        break;
+                    case DbFieldType::INT64:
+                        temp_strs.push_back(std::to_string(p.as_int64()));
+                        break;
+                    case DbFieldType::UINT64:
+                        temp_strs.push_back(std::to_string(p.as_uint64()));
+                        break;
+                    case DbFieldType::FLOAT:
+                        temp_strs.push_back(std::to_string(p.as_float()));
+                        break;
+                    case DbFieldType::DOUBLE:
+                        temp_strs.push_back(std::to_string(p.as_double()));
+                        break;
+                    case DbFieldType::STRING: {
+                        temp_strs.emplace_back(p.as_string());
+                        break;
+                    }
+                    default:
+                        temp_strs.push_back("");
+                        break;
+                }
+                values.push_back(temp_strs.back().c_str());
+                lengths.push_back(static_cast<int>(temp_strs.back().size()));
+            }
+        }
+
+        // 注意：temp_strs 必须在 StartSend 期间保持存活
+        auto temp_holder = std::make_shared<std::vector<std::string>>(std::move(temp_strs));
+
+        StartSend(
+            [sql = *sql_str, temp_holder,
+             n_params = static_cast<int>(params_copy->size()),
+             values, lengths, formats](PGconn* conn) -> bool {
+                return PQsendQueryParams(conn, sql.c_str(),
+                    n_params, nullptr, values.data(),
+                    lengths.data(), formats.data(), 0) == 1;
+            },
+            [promise = std::move(promise)](DbResult result) mutable {
+                promise.setValue(std::move(result));
+            });
     });
 
     co_return co_await std::move(future);
@@ -143,8 +394,14 @@ async_simple::coro::Lazy<uint64_t> PgConnection::Execute(std::string_view sql)
     std::string sql_str(sql);
     boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 promise = std::move(promise)]() mutable {
-        DbResult r = SyncQuery(sql.c_str());
-        promise.setValue(r.is_ok() ? r.affected_rows() : 0);
+        StartSend(
+            [sql = std::move(sql)](PGconn* conn) -> bool {
+                return PQsendQuery(conn, sql.c_str()) == 1;
+            },
+            [promise = std::move(promise)](DbResult result) mutable {
+                uint64_t affected = result.is_ok() ? result.affected_rows() : 0;
+                promise.setValue(affected);
+            });
     });
 
     co_return co_await std::move(future);
@@ -161,8 +418,13 @@ async_simple::coro::Lazy<void> PgConnection::Begin()
     auto self = shared_from_this();
 
     boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
-        SyncCommand("BEGIN");
-        promise.setValue();
+        StartSend(
+            [](PGconn* conn) -> bool {
+                return PQsendQuery(conn, "BEGIN") == 1;
+            },
+            [promise = std::move(promise)](DbResult) mutable {
+                promise.setValue();
+            });
     });
 
     co_await std::move(future);
@@ -175,8 +437,13 @@ async_simple::coro::Lazy<void> PgConnection::Commit()
     auto self = shared_from_this();
 
     boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
-        SyncCommand("COMMIT");
-        promise.setValue();
+        StartSend(
+            [](PGconn* conn) -> bool {
+                return PQsendQuery(conn, "COMMIT") == 1;
+            },
+            [promise = std::move(promise)](DbResult) mutable {
+                promise.setValue();
+            });
     });
 
     co_await std::move(future);
@@ -189,15 +456,20 @@ async_simple::coro::Lazy<void> PgConnection::Rollback()
     auto self = shared_from_this();
 
     boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
-        SyncCommand("ROLLBACK");
-        promise.setValue();
+        StartSend(
+            [](PGconn* conn) -> bool {
+                return PQsendQuery(conn, "ROLLBACK") == 1;
+            },
+            [promise = std::move(promise)](DbResult) mutable {
+                promise.setValue();
+            });
     });
 
     co_await std::move(future);
 }
 
 // =========================================================================
-// 异步回调 API — 在 IO 线程上同步执行后回调
+// 异步回调 API — 非阻塞，IO 线程从不阻塞
 // =========================================================================
 
 void PgConnection::AsyncConnect(const DbConfig& cfg, std::function<void(bool)> callback)
@@ -223,7 +495,13 @@ void PgConnection::AsyncQuery(std::string_view sql, std::function<void(DbResult)
     std::string sql_str(sql);
     boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 cb = std::move(callback)]() mutable {
-        cb(SyncQuery(sql.c_str()));
+        StartSend(
+            [sql = std::move(sql)](PGconn* conn) -> bool {
+                return PQsendQuery(conn, sql.c_str()) == 1;
+            },
+            [cb = std::move(cb)](DbResult result) mutable {
+                cb(std::move(result));
+            });
     });
 }
 
@@ -231,10 +509,78 @@ void PgConnection::AsyncQuery(std::string_view sql, const std::vector<DbValue>& 
                               std::function<void(DbResult)> callback)
 {
     auto self = shared_from_this();
-    std::string sql_str(sql);
-    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
-                                params, cb = std::move(callback)]() mutable {
-        cb(SyncExecParams(sql.c_str(), params));
+    auto sql_str  = std::make_shared<std::string>(sql);
+    auto params_copy = std::make_shared<std::vector<DbValue>>(params);
+
+    boost::asio::post(io_ctx_, [this, self, sql_str, params_copy,
+                                cb = std::move(callback)]() mutable {
+        // 转换参数
+        std::vector<const char*> values;
+        std::vector<int>         lengths;
+        std::vector<int>         formats;
+        std::vector<std::string> temp_strs;
+
+        values.reserve(params_copy->size());
+        lengths.reserve(params_copy->size());
+        formats.reserve(params_copy->size());
+        temp_strs.reserve(params_copy->size());
+
+        for (const auto& p : *params_copy) {
+            formats.push_back(0);
+            if (p.is_null()) {
+                values.push_back(nullptr);
+                lengths.push_back(0);
+            } else {
+                switch (p.type()) {
+                    case DbFieldType::BOOL:
+                        temp_strs.push_back(p.as_bool() ? "t" : "f");
+                        break;
+                    case DbFieldType::INT8:
+                        temp_strs.push_back(std::to_string(p.as_int8()));
+                        break;
+                    case DbFieldType::INT16:
+                        temp_strs.push_back(std::to_string(p.as_int16()));
+                        break;
+                    case DbFieldType::INT32:
+                        temp_strs.push_back(std::to_string(p.as_int32()));
+                        break;
+                    case DbFieldType::INT64:
+                        temp_strs.push_back(std::to_string(p.as_int64()));
+                        break;
+                    case DbFieldType::UINT64:
+                        temp_strs.push_back(std::to_string(p.as_uint64()));
+                        break;
+                    case DbFieldType::FLOAT:
+                        temp_strs.push_back(std::to_string(p.as_float()));
+                        break;
+                    case DbFieldType::DOUBLE:
+                        temp_strs.push_back(std::to_string(p.as_double()));
+                        break;
+                    case DbFieldType::STRING:
+                        temp_strs.emplace_back(p.as_string());
+                        break;
+                    default:
+                        temp_strs.push_back("");
+                        break;
+                }
+                values.push_back(temp_strs.back().c_str());
+                lengths.push_back(static_cast<int>(temp_strs.back().size()));
+            }
+        }
+
+        auto temp_holder = std::make_shared<std::vector<std::string>>(std::move(temp_strs));
+
+        StartSend(
+            [sql = *sql_str, temp_holder,
+             n_params = static_cast<int>(params_copy->size()),
+             values, lengths, formats](PGconn* conn) -> bool {
+                return PQsendQueryParams(conn, sql.c_str(),
+                    n_params, nullptr, values.data(),
+                    lengths.data(), formats.data(), 0) == 1;
+            },
+            [cb = std::move(cb)](DbResult result) mutable {
+                cb(std::move(result));
+            });
     });
 }
 
@@ -244,8 +590,13 @@ void PgConnection::AsyncExecute(std::string_view sql, std::function<void(uint64_
     std::string sql_str(sql);
     boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 cb = std::move(callback)]() mutable {
-        DbResult r = SyncQuery(sql.c_str());
-        cb(r.is_ok() ? r.affected_rows() : 0);
+        StartSend(
+            [sql = std::move(sql)](PGconn* conn) -> bool {
+                return PQsendQuery(conn, sql.c_str()) == 1;
+            },
+            [cb = std::move(cb)](DbResult result) mutable {
+                cb(result.is_ok() ? result.affected_rows() : 0);
+            });
     });
 }
 
@@ -253,7 +604,13 @@ void PgConnection::AsyncBegin(std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
     boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
-        cb(SyncCommand("BEGIN"));
+        StartSend(
+            [](PGconn* conn) -> bool {
+                return PQsendQuery(conn, "BEGIN") == 1;
+            },
+            [cb = std::move(cb)](DbResult result) mutable {
+                cb(result.is_ok());
+            });
     });
 }
 
@@ -261,7 +618,13 @@ void PgConnection::AsyncCommit(std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
     boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
-        cb(SyncCommand("COMMIT"));
+        StartSend(
+            [](PGconn* conn) -> bool {
+                return PQsendQuery(conn, "COMMIT") == 1;
+            },
+            [cb = std::move(cb)](DbResult result) mutable {
+                cb(result.is_ok());
+            });
     });
 }
 
@@ -269,12 +632,18 @@ void PgConnection::AsyncRollback(std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
     boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
-        cb(SyncCommand("ROLLBACK"));
+        StartSend(
+            [](PGconn* conn) -> bool {
+                return PQsendQuery(conn, "ROLLBACK") == 1;
+            },
+            [cb = std::move(cb)](DbResult result) mutable {
+                cb(result.is_ok());
+            });
     });
 }
 
 // =========================================================================
-// 内部 — 同步 libpq 操作（在 IO 线程上执行）
+// 内部工具
 // =========================================================================
 
 void PgConnection::CloseSync()
@@ -300,113 +669,6 @@ std::string PgConnection::BuildConnString(const DbConfig& cfg)
     else
         ss << " sslmode=disable";
     return ss.str();
-}
-
-DbResult PgConnection::SyncQuery(const char* sql)
-{
-    if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
-        return DbResult::Error("Connection not available");
-    }
-
-    // 使用同步 libpq（在 IO 线程上阻塞是安全的）
-    PGresult* res = PQexec(conn_, sql);
-    if (!res) {
-        return DbResult::Error(PQerrorMessage(conn_));
-    }
-
-    DbResult result = ParseResult(res);
-    PQclear(res);
-    return result;
-}
-
-DbResult PgConnection::SyncExecParams(const char* sql, const std::vector<DbValue>& params)
-{
-    if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
-        return DbResult::Error("Connection not available");
-    }
-
-    // 将 DbValue 转换为 libpq 参数
-    std::vector<const char*> values;
-    std::vector<int>         lengths;
-    std::vector<int>         formats;  // 0=text, 1=binary
-    std::vector<std::string> temp_strs;
-
-    values.reserve(params.size());
-    lengths.reserve(params.size());
-    formats.reserve(params.size());
-    temp_strs.reserve(params.size());
-
-    for (const auto& p : params) {
-        formats.push_back(0); // all text format
-        if (p.is_null()) {
-            values.push_back(nullptr);
-            lengths.push_back(0);
-        } else {
-            switch (p.type()) {
-                case DbFieldType::BOOL:
-                    temp_strs.push_back(p.as_bool() ? "t" : "f");
-                    break;
-                case DbFieldType::INT8:
-                    temp_strs.push_back(std::to_string(p.as_int8()));
-                    break;
-                case DbFieldType::INT16:
-                    temp_strs.push_back(std::to_string(p.as_int16()));
-                    break;
-                case DbFieldType::INT32:
-                    temp_strs.push_back(std::to_string(p.as_int32()));
-                    break;
-                case DbFieldType::INT64:
-                    temp_strs.push_back(std::to_string(p.as_int64()));
-                    break;
-                case DbFieldType::UINT64:
-                    temp_strs.push_back(std::to_string(p.as_uint64()));
-                    break;
-                case DbFieldType::FLOAT:
-                    temp_strs.push_back(std::to_string(p.as_float()));
-                    break;
-                case DbFieldType::DOUBLE:
-                    temp_strs.push_back(std::to_string(p.as_double()));
-                    break;
-                case DbFieldType::STRING: {
-                    auto sv = p.as_string();
-                    temp_strs.emplace_back(sv);
-                    break;
-                }
-                default:
-                    temp_strs.push_back("");
-                    break;
-            }
-            values.push_back(temp_strs.back().c_str());
-            lengths.push_back(static_cast<int>(temp_strs.back().size()));
-        }
-    }
-
-    PGresult* res = PQexecParams(conn_, sql,
-        static_cast<int>(params.size()), nullptr,
-        values.data(), lengths.data(), formats.data(), 0);
-    if (!res) {
-        return DbResult::Error(PQerrorMessage(conn_));
-    }
-
-    DbResult result = ParseResult(res);
-    PQclear(res);
-    return result;
-}
-
-bool PgConnection::SyncCommand(const char* sql)
-{
-    if (!conn_ || PQstatus(conn_) != CONNECTION_OK) {
-        return false;
-    }
-    PGresult* res = PQexec(conn_, sql);
-    if (!res) {
-        LOG_ERROR("[PgConnection] command failed: {} — {}", sql,
-                  PQerrorMessage(conn_));
-        return false;
-    }
-    auto status = PQresultStatus(res);
-    PQclear(res);
-    return status == PGRES_COMMAND_OK;
 }
 
 // =========================================================================
@@ -448,7 +710,6 @@ DbResult PgConnection::ParseResult(PGresult* res)
         if (affected_str && affected_str[0] != '\0')
             affected = std::stoull(affected_str);
 
-        // 从 OID 值中获取 insert_id（仅当单行 INSERT 时有效）
         Oid oid = PQoidValue(res);
         return DbResult::AffectedRows(affected, oid != InvalidOid ? oid : 0);
     }
@@ -462,8 +723,6 @@ DbValue PgConnection::ToDbValue(const char* value, Oid type_oid)
     if (!value)
         return DbValue(nullptr);
 
-    // libpq 返回文本格式，按 OID 类型转换
-    // https://www.postgresql.org/docs/current/catalog-pg-type.html
     switch (type_oid) {
         case 16:   // bool
             return DbValue(value[0] == 't');
