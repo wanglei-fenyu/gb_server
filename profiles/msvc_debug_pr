@@ -13,11 +13,7 @@ boost/*:without_process=True
 protobuf/*:shared=False
 
 [conf]
+tools.microsoft.msbuild:installation_path=C:/Program Files/Microsoft Visual Studio/18/Community
 tools.build:cxxflags+=["/DBOOST_CHARCONV_DISABLE_FLOAT128"]
 tools.build:skip_test=True
 tools.build:jobs=8
-
-[buildenv]
-CC="cl"
-CXX="cl"
-VS_INSTALL_PATH="C:/Program Files/Microsoft Visual Studio/18/Community"
