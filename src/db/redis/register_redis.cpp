@@ -330,6 +330,34 @@ public:
         });
     }
 
+    /// 配对回调（member+score pairs → Lua table of {member, score}）。
+    void PostCbPairs(boost::system::error_code ec,
+                     std::vector<std::pair<std::string, double>> pairs)
+    {
+        auto w = worker_.lock();
+        if (!w) return;
+        auto cb_ptr = cb_;
+        w->Post([cb_ptr, ec, pairs = std::move(pairs)]() mutable {
+            if (!cb_ptr->valid()) return;
+            if (ec)
+            {
+                (*cb_ptr)(ec.message(), sol::nil);
+                return;
+            }
+            lua_State* L = cb_ptr->lua_state();
+            sol::state_view lua(L);
+            sol::table t = lua.create_table();
+            for (size_t i = 0; i < pairs.size(); i++)
+            {
+                sol::table entry = lua.create_table();
+                entry["member"] = std::move(pairs[i].first);
+                entry["score"]  = pairs[i].second;
+                t[i + 1] = std::move(entry);
+            }
+            (*cb_ptr)("", std::move(t));
+        });
+    }
+
     /// 泛型回调（GenericResponse → Lua）。
     void PostCbGeneric(boost::system::error_code ec,
                        RedisConnection::GenericResponse resp)
@@ -687,6 +715,120 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         c->AsyncZRank(key, member, [bridge](boost::system::error_code ec, int64_t rank) {
             bridge->PostCb(std::move(ec), rank);
         });
+    };
+
+    /// redis.AsyncZRevRank(key, member, callback(err, rank))
+    redis["AsyncZRevRank"] = [](const std::string& key, const std::string& member,
+                                sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRevRank(key, member, [bridge](boost::system::error_code ec, int64_t rank) {
+            bridge->PostCb(std::move(ec), rank);
+        });
+    };
+
+    /// redis.AsyncZCount(key, min, max, callback(err, count))
+    redis["AsyncZCount"] = [](const std::string& key, double min, double max,
+                              sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZCount(key, min, max, [bridge](boost::system::error_code ec, int64_t count) {
+            bridge->PostCb(std::move(ec), count);
+        });
+    };
+
+    /// redis.AsyncZIncrBy(key, member, delta, callback(err, new_score))
+    redis["AsyncZIncrBy"] = [](const std::string& key, const std::string& member,
+                               double delta, sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZIncrBy(key, member, delta, [bridge](boost::system::error_code ec, double score) {
+            bridge->PostCbDouble(std::move(ec), score);
+        });
+    };
+
+    /// redis.AsyncZRangeByScore(key, min, max, with_scores, callback(err, {val, ...}))
+    redis["AsyncZRangeByScore"] = [](const std::string& key, double min, double max,
+                                     bool with_scores, sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRangeByScore(key, min, max, with_scores,
+                              [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+                                  bridge->PostCbStrVec(std::move(ec), std::move(val));
+                              });
+    };
+
+    /// redis.AsyncZRevRangeByScore(key, min, max, with_scores, callback(err, {val, ...}))
+    redis["AsyncZRevRangeByScore"] = [](const std::string& key, double min, double max,
+                                        bool with_scores, sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRevRangeByScore(key, min, max, with_scores,
+                                 [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+                                     bridge->PostCbStrVec(std::move(ec), std::move(val));
+                                 });
+    };
+
+    /// redis.AsyncZRemRangeByRank(key, start, stop, callback(err, n))
+    redis["AsyncZRemRangeByRank"] = [](const std::string& key, int64_t start, int64_t stop,
+                                       sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRemRangeByRank(key, start, stop, [bridge](boost::system::error_code ec, int64_t n) {
+            bridge->PostCb(std::move(ec), n);
+        });
+    };
+
+    /// redis.AsyncZRemRangeByScore(key, min, max, callback(err, n))
+    redis["AsyncZRemRangeByScore"] = [](const std::string& key, double min, double max,
+                                        sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRemRangeByScore(key, min, max, [bridge](boost::system::error_code ec, int64_t n) {
+            bridge->PostCb(std::move(ec), n);
+        });
+    };
+
+    /// redis.AsyncZRangeWithScores(key, start, stop, callback(err, {{member, score}, ...}))
+    redis["AsyncZRangeWithScores"] = [](const std::string& key, int64_t start, int64_t stop,
+                                        sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRangeWithScores(key, start, stop,
+                                 [bridge](boost::system::error_code ec,
+                                          std::vector<std::pair<std::string, double>> pairs) {
+                                     bridge->PostCbPairs(std::move(ec), std::move(pairs));
+                                 });
+    };
+
+    /// redis.AsyncZRevRangeWithScores(key, start, stop, callback(err, {{member, score}, ...}))
+    redis["AsyncZRevRangeWithScores"] = [](const std::string& key, int64_t start, int64_t stop,
+                                           sol::function cb) {
+        auto* c = GetConn();
+        auto   w = gb::WorkerManager::Instance()->GetCurWorker();
+        if (!c || !w) return;
+        auto bridge = LuaCbBridge::Create(w, std::move(cb));
+        c->AsyncZRevRangeWithScores(key, start, stop,
+                                    [bridge](boost::system::error_code ec,
+                                             std::vector<std::pair<std::string, double>> pairs) {
+                                        bridge->PostCbPairs(std::move(ec), std::move(pairs));
+                                    });
     };
 
     // ── Key 管理异步 ──

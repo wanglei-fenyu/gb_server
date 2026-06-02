@@ -225,6 +225,17 @@ async_simple::coro::Lazy<std::vector<std::string>> RedisConnection::CbToLazyStrV
     co_return co_await std::move(future);
 }
 
+async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> RedisConnection::CbToLazyPairs(
+    std::function<void(AsyncCbPairs)> invoker)
+{
+    async_simple::Promise<std::vector<std::pair<std::string, double>>> promise;
+    auto future = promise.getFuture();
+    invoker([promise = std::move(promise)](boost::system::error_code ec, std::vector<std::pair<std::string, double>> val) mutable {
+        promise.setValue(std::move(val));
+    });
+    co_return co_await std::move(future);
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // KV — 异步回调
 // ═════════════════════════════════════════════════════════════════════════════
@@ -641,6 +652,170 @@ void RedisConnection::AsyncZRank(std::string key, std::string member, AsyncCbInt
               });
 }
 
+void RedisConnection::AsyncZRevRank(std::string key, std::string member, AsyncCbInt cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
+    req->push("ZREVRANK", std::move(key), std::move(member));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, -1); return; }
+                  std::string val;
+                  if (ExtractOptionalValue(std::get<0>(*resp_ptr), val))
+                      cb(ec, static_cast<int64_t>(std::stoll(val)));
+                  else
+                      cb(ec, -1);
+              });
+}
+
+void RedisConnection::AsyncZCount(std::string key, double min, double max, AsyncCbInt cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<long long>>();
+    req->push("ZCOUNT", std::move(key), std::to_string(min), std::to_string(max));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, 0); return; }
+                  long long val{};
+                  ExtractValue(std::get<0>(*resp_ptr), val);
+                  cb(ec, static_cast<int64_t>(val));
+              });
+}
+
+void RedisConnection::AsyncZIncrBy(std::string key, std::string member, double delta, AsyncCbDouble cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<std::string>>();
+    req->push("ZINCRBY", std::move(key), std::to_string(delta), std::move(member));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, 0.0); return; }
+                  std::string val;
+                  ExtractValue(std::get<0>(*resp_ptr), val);
+                  cb(ec, std::stod(val));
+              });
+}
+
+void RedisConnection::AsyncZRangeByScore(std::string key, double min, double max,
+                                         bool with_scores, AsyncCbStrVec cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
+    if (with_scores)
+        req->push("ZRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max), "WITHSCORES");
+    else
+        req->push("ZRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, {}); return; }
+                  std::vector<std::string> val;
+                  ExtractValue(std::get<0>(*resp_ptr), val);
+                  cb(ec, std::move(val));
+              });
+}
+
+void RedisConnection::AsyncZRevRangeByScore(std::string key, double min, double max,
+                                            bool with_scores, AsyncCbStrVec cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
+    if (with_scores)
+        req->push("ZREVRANGEBYSCORE", std::move(key), std::to_string(max), std::to_string(min), "WITHSCORES");
+    else
+        req->push("ZREVRANGEBYSCORE", std::move(key), std::to_string(max), std::to_string(min));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, {}); return; }
+                  std::vector<std::string> val;
+                  ExtractValue(std::get<0>(*resp_ptr), val);
+                  cb(ec, std::move(val));
+              });
+}
+
+void RedisConnection::AsyncZRemRangeByRank(std::string key, int64_t start, int64_t stop, AsyncCbInt cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<long long>>();
+    req->push("ZREMRANGEBYRANK", std::move(key), std::to_string(start), std::to_string(stop));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, 0); return; }
+                  long long val{};
+                  ExtractValue(std::get<0>(*resp_ptr), val);
+                  cb(ec, static_cast<int64_t>(val));
+              });
+}
+
+void RedisConnection::AsyncZRemRangeByScore(std::string key, double min, double max, AsyncCbInt cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<long long>>();
+    req->push("ZREMRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max));
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, 0); return; }
+                  long long val{};
+                  ExtractValue(std::get<0>(*resp_ptr), val);
+                  cb(ec, static_cast<int64_t>(val));
+              });
+}
+
+void RedisConnection::AsyncZRangeWithScores(std::string key, int64_t start, int64_t stop,
+                                            AsyncCbPairs cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
+    req->push("ZRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES");
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, {}); return; }
+                  std::vector<std::string> flat;
+                  ExtractValue(std::get<0>(*resp_ptr), flat);
+                  std::vector<std::pair<std::string, double>> pairs;
+                  pairs.reserve(flat.size() / 2);
+                  for (size_t i = 0; i + 1 < flat.size(); i += 2)
+                      pairs.emplace_back(std::move(flat[i]), std::stod(flat[i + 1]));
+                  cb(ec, std::move(pairs));
+              });
+}
+
+void RedisConnection::AsyncZRevRangeWithScores(std::string key, int64_t start, int64_t stop,
+                                               AsyncCbPairs cb)
+{
+    auto req  = std::make_shared<boost::redis::request>();
+    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
+    req->push("ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES");
+
+    auto resp_ptr = resp;
+    AsyncExec(std::move(req), std::move(resp),
+              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
+                  if (ec) { cb(ec, {}); return; }
+                  std::vector<std::string> flat;
+                  ExtractValue(std::get<0>(*resp_ptr), flat);
+                  std::vector<std::pair<std::string, double>> pairs;
+                  pairs.reserve(flat.size() / 2);
+                  for (size_t i = 0; i + 1 < flat.size(); i += 2)
+                      pairs.emplace_back(std::move(flat[i]), std::stod(flat[i + 1]));
+                  cb(ec, std::move(pairs));
+              });
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // Key 管理 — 异步回调
 // ═════════════════════════════════════════════════════════════════════════════
@@ -917,6 +1092,73 @@ async_simple::coro::Lazy<int64_t> RedisConnection::CoZRank(std::string key, std:
 {
     co_return co_await CbToLazyInt([this, key = std::move(key), member = std::move(member)](AsyncCbInt cb) mutable {
         AsyncZRank(std::move(key), std::move(member), std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<int64_t> RedisConnection::CoZRevRank(std::string key, std::string member)
+{
+    co_return co_await CbToLazyInt([this, key = std::move(key), member = std::move(member)](AsyncCbInt cb) mutable {
+        AsyncZRevRank(std::move(key), std::move(member), std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<int64_t> RedisConnection::CoZCount(std::string key, double min, double max)
+{
+    co_return co_await CbToLazyInt([this, key = std::move(key), min, max](AsyncCbInt cb) mutable {
+        AsyncZCount(std::move(key), min, max, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<double> RedisConnection::CoZIncrBy(std::string key, std::string member, double delta)
+{
+    co_return co_await CbToLazyDouble([this, key = std::move(key), member = std::move(member), delta](AsyncCbDouble cb) mutable {
+        AsyncZIncrBy(std::move(key), std::move(member), delta, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<std::vector<std::string>> RedisConnection::CoZRangeByScore(
+    std::string key, double min, double max, bool with_scores)
+{
+    co_return co_await CbToLazyStrVec([this, key = std::move(key), min, max, with_scores](AsyncCbStrVec cb) mutable {
+        AsyncZRangeByScore(std::move(key), min, max, with_scores, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<std::vector<std::string>> RedisConnection::CoZRevRangeByScore(
+    std::string key, double min, double max, bool with_scores)
+{
+    co_return co_await CbToLazyStrVec([this, key = std::move(key), min, max, with_scores](AsyncCbStrVec cb) mutable {
+        AsyncZRevRangeByScore(std::move(key), min, max, with_scores, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<int64_t> RedisConnection::CoZRemRangeByRank(std::string key, int64_t start, int64_t stop)
+{
+    co_return co_await CbToLazyInt([this, key = std::move(key), start, stop](AsyncCbInt cb) mutable {
+        AsyncZRemRangeByRank(std::move(key), start, stop, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<int64_t> RedisConnection::CoZRemRangeByScore(std::string key, double min, double max)
+{
+    co_return co_await CbToLazyInt([this, key = std::move(key), min, max](AsyncCbInt cb) mutable {
+        AsyncZRemRangeByScore(std::move(key), min, max, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> RedisConnection::CoZRangeWithScores(
+    std::string key, int64_t start, int64_t stop)
+{
+    co_return co_await CbToLazyPairs([this, key = std::move(key), start, stop](AsyncCbPairs cb) mutable {
+        AsyncZRangeWithScores(std::move(key), start, stop, std::move(cb));
+    });
+}
+
+async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> RedisConnection::CoZRevRangeWithScores(
+    std::string key, int64_t start, int64_t stop)
+{
+    co_return co_await CbToLazyPairs([this, key = std::move(key), start, stop](AsyncCbPairs cb) mutable {
+        AsyncZRevRangeWithScores(std::move(key), start, stop, std::move(cb));
     });
 }
 

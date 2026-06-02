@@ -68,6 +68,7 @@ public:
     using AsyncCbDouble = std::function<void(boost::system::error_code, double)>;
     using AsyncCbBool   = std::function<void(boost::system::error_code, bool)>;
     using AsyncCbStrVec = std::function<void(boost::system::error_code, std::vector<std::string>)>;
+    using AsyncCbPairs  = std::function<void(boost::system::error_code, std::vector<std::pair<std::string, double>>)>;
 
     // ── KV ──
     void AsyncSet(std::string key, std::string value, AsyncCb cb);
@@ -101,6 +102,15 @@ public:
     void AsyncZRem(std::string key, std::string member, AsyncCbInt cb);
     void AsyncZScore(std::string key, std::string member, AsyncCbDouble cb);
     void AsyncZRank(std::string key, std::string member, AsyncCbInt cb);
+    void AsyncZRevRank(std::string key, std::string member, AsyncCbInt cb);
+    void AsyncZCount(std::string key, double min, double max, AsyncCbInt cb);
+    void AsyncZIncrBy(std::string key, std::string member, double delta, AsyncCbDouble cb);
+    void AsyncZRangeByScore(std::string key, double min, double max, bool with_scores, AsyncCbStrVec cb);
+    void AsyncZRevRangeByScore(std::string key, double min, double max, bool with_scores, AsyncCbStrVec cb);
+    void AsyncZRemRangeByRank(std::string key, int64_t start, int64_t stop, AsyncCbInt cb);
+    void AsyncZRemRangeByScore(std::string key, double min, double max, AsyncCbInt cb);
+    void AsyncZRangeWithScores(std::string key, int64_t start, int64_t stop, AsyncCbPairs cb);
+    void AsyncZRevRangeWithScores(std::string key, int64_t start, int64_t stop, AsyncCbPairs cb);
 
     // ── Key 管理 ──
     void AsyncExpire(std::string key, int64_t seconds, AsyncCbBool cb);
@@ -154,6 +164,15 @@ public:
     async_simple::coro::Lazy<int64_t>              CoZRem(std::string key, std::string member);
     async_simple::coro::Lazy<double>               CoZScore(std::string key, std::string member);
     async_simple::coro::Lazy<int64_t>              CoZRank(std::string key, std::string member);
+    async_simple::coro::Lazy<int64_t>              CoZRevRank(std::string key, std::string member);
+    async_simple::coro::Lazy<int64_t>              CoZCount(std::string key, double min, double max);
+    async_simple::coro::Lazy<double>               CoZIncrBy(std::string key, std::string member, double delta);
+    async_simple::coro::Lazy<std::vector<std::string>> CoZRangeByScore(std::string key, double min, double max, bool with_scores);
+    async_simple::coro::Lazy<std::vector<std::string>> CoZRevRangeByScore(std::string key, double min, double max, bool with_scores);
+    async_simple::coro::Lazy<int64_t>              CoZRemRangeByRank(std::string key, int64_t start, int64_t stop);
+    async_simple::coro::Lazy<int64_t>              CoZRemRangeByScore(std::string key, double min, double max);
+    async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> CoZRangeWithScores(std::string key, int64_t start, int64_t stop);
+    async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> CoZRevRangeWithScores(std::string key, int64_t start, int64_t stop);
 
     // ── Key 管理 ──
     async_simple::coro::Lazy<bool>    CoExpire(std::string key, int64_t seconds);
@@ -204,6 +223,9 @@ private:
 
     // ── 协程辅助：将 AsyncCbStrVec 转为 Lazy<vector<string>> ──
     async_simple::coro::Lazy<std::vector<std::string>> CbToLazyStrVec(std::function<void(AsyncCbStrVec)> invoker);
+
+    // ── 协程辅助：将 AsyncCbPairs 转为 Lazy<vector<pair<string, double>>> ──
+    async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> CbToLazyPairs(std::function<void(AsyncCbPairs)> invoker);
 
 private:
     boost::asio::io_context                                           io_context_;
