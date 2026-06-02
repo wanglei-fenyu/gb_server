@@ -9,6 +9,7 @@ int MenuTestRedisHash();
 int MenuTestRedisList();
 int MenuTestRedisZSet();
 int MenuTestRedisZSetRange();
+int MenuTestRedisZSetAdv();
 int MenuTestRedisLuaScript();
 int MenuTestRedisExpire();
 int MenuTestRedisAsyncCallback();

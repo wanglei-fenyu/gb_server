@@ -455,6 +455,201 @@ int MenuTestRedisZSetRange()
 }
 
 // ══════════════════════════════════════════════════════════════════════
+// 新增: ZSET 高级操作 — CoZRevRank / CoZCount / CoZIncrBy / CoZRangeByScore
+//      CoZRevRangeByScore / CoZRangeWithScores / CoZRevRangeWithScores
+//      CoZRemRangeByRank / CoZRemRangeByScore
+// ══════════════════════════════════════════════════════════════════════
+
+int MenuTestRedisZSetAdv()
+{
+    TestSection("Redis — ZSET Advanced Operations (Co*)");
+    RedisConnection conn;
+    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    int result = 0;
+
+    // Clean up at START
+    async_simple::coro::syncAwait(conn.CoDel("db:zset_adv"));
+
+    // ── Setup: 4 members with distinct scores ──
+    {
+        auto n1 = async_simple::coro::syncAwait(conn.CoZAdd("db:zset_adv", 10.0, "m_a"));
+        auto n2 = async_simple::coro::syncAwait(conn.CoZAdd("db:zset_adv", 20.0, "m_b"));
+        auto n3 = async_simple::coro::syncAwait(conn.CoZAdd("db:zset_adv", 30.0, "m_c"));
+        auto n4 = async_simple::coro::syncAwait(conn.CoZAdd("db:zset_adv", 40.0, "m_d"));
+        bool ok = (n1 == 1 && n2 == 1 && n3 == 1 && n4 == 1);
+        TestResult("CoZAdd 4 members (10/20/30/40)", ok,
+                   ok ? "all added" : "n1=" + std::to_string(n1));
+        if (!ok) ++result;
+    }
+
+    // Expected order by score: m_a(10), m_b(20), m_c(30), m_d(40)
+
+    // ── 1. CoZRevRank (0-based reverse rank) ──
+    {
+        int64_t rr_a = async_simple::coro::syncAwait(conn.CoZRevRank("db:zset_adv", "m_a"));
+        int64_t rr_d = async_simple::coro::syncAwait(conn.CoZRevRank("db:zset_adv", "m_d"));
+        bool ok = (rr_a == 3 && rr_d == 0);
+        TestResult("CoZRevRank (m_a=3, m_d=0)", ok,
+                   "m_a=" + std::to_string(rr_a) + ", m_d=" + std::to_string(rr_d));
+        if (!ok) ++result;
+    }
+
+    // ── 2. CoZCount (members in score range) ──
+    {
+        int64_t cnt_10_30 = async_simple::coro::syncAwait(conn.CoZCount("db:zset_adv", 10.0, 30.0));
+        int64_t cnt_5_50  = async_simple::coro::syncAwait(conn.CoZCount("db:zset_adv", 5.0, 50.0));
+        int64_t cnt_99    = async_simple::coro::syncAwait(conn.CoZCount("db:zset_adv", 99.0, 999.0));
+        bool ok = (cnt_10_30 == 3 && cnt_5_50 == 4 && cnt_99 == 0);
+        TestResult("CoZCount (10-30=3, 5-50=4, 99-999=0)", ok,
+                   "10-30=" + std::to_string(cnt_10_30) +
+                   ", 5-50=" + std::to_string(cnt_5_50) +
+                   ", 99-999=" + std::to_string(cnt_99));
+        if (!ok) ++result;
+    }
+
+    // ── 3. CoZIncrBy (increment member score) ──
+    {
+        double new_score = async_simple::coro::syncAwait(conn.CoZIncrBy("db:zset_adv", "m_a", 5.0));
+        bool ok = std::abs(new_score - 15.0) < 0.001;
+        TestResult("CoZIncrBy m_a +5 = 15.0", ok,
+                   "score=" + std::to_string(new_score));
+        if (!ok) ++result;
+
+        // Verify with ZScore
+        double verify = async_simple::coro::syncAwait(conn.CoZScore("db:zset_adv", "m_a"));
+        if (std::abs(verify - 15.0) >= 0.001) ++result;
+        TestResult("CoZScore verify m_a=15.0",
+                   std::abs(verify - 15.0) < 0.001,
+                   "score=" + std::to_string(verify));
+    }
+
+    // Order now: m_a(15), m_b(20), m_c(30), m_d(40)
+
+    // ── 4. CoZRange 0 -1 (no scores) ──
+    {
+        auto r = async_simple::coro::syncAwait(conn.CoZRange("db:zset_adv", 0, -1, false));
+        bool ok = (r.size() == 4 && r[0] == "m_a" && r[1] == "m_b" && r[2] == "m_c" && r[3] == "m_d");
+        std::string detail;
+        for (auto& s : r) detail += (detail.empty() ? "" : ",") + s;
+        TestResult("CoZRange 0 -1 (no scores, 4 members)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 5. CoZRange 0 -1 (with scores) ──
+    {
+        auto r = async_simple::coro::syncAwait(conn.CoZRange("db:zset_adv", 0, -1, true));
+        // r = [m_a, 15, m_b, 20, m_c, 30, m_d, 40]
+        bool ok = (r.size() == 8);
+        if (ok) {
+            ok = ok && r[0] == "m_a" && std::stod(r[1]) == 15.0;
+            ok = ok && r[2] == "m_b" && std::stod(r[3]) == 20.0;
+            ok = ok && r[4] == "m_c" && std::stod(r[5]) == 30.0;
+            ok = ok && r[6] == "m_d" && std::stod(r[7]) == 40.0;
+        }
+        std::string detail;
+        for (size_t i = 0; i < r.size(); i += 2)
+            detail += (i > 0 ? ", " : "") + r[i] + "=" + r[i+1];
+        TestResult("CoZRange 0 -1 (with scores, verify all)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 6. CoZRevRange 0 -1 (no scores, reversed) ──
+    {
+        auto r = async_simple::coro::syncAwait(conn.CoZRevRange("db:zset_adv", 0, -1, false));
+        bool ok = (r.size() == 4 && r[0] == "m_d" && r[1] == "m_c" && r[2] == "m_b" && r[3] == "m_a");
+        std::string detail;
+        for (auto& s : r) detail += (detail.empty() ? "" : ",") + s;
+        TestResult("CoZRevRange 0 -1 (no scores, reversed)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 7. CoZRangeByScore 10..30 → m_a(15), m_b(20), m_c(30) ──
+    {
+        auto r = async_simple::coro::syncAwait(conn.CoZRangeByScore("db:zset_adv", 10.0, 30.0, false));
+        bool ok = (r.size() == 3 && r[0] == "m_a" && r[1] == "m_b" && r[2] == "m_c");
+        std::string detail;
+        for (auto& s : r) detail += (detail.empty() ? "" : ",") + s;
+        TestResult("CoZRangeByScore 10-30 (m_a,m_b,m_c)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 8. CoZRevRangeByScore 30..10 → reversed: m_c, m_b, m_a ──
+    {
+        auto r = async_simple::coro::syncAwait(conn.CoZRevRangeByScore("db:zset_adv", 30.0, 10.0, false));
+        bool ok = (r.size() == 3 && r[0] == "m_c" && r[1] == "m_b" && r[2] == "m_a");
+        std::string detail;
+        for (auto& s : r) detail += (detail.empty() ? "" : ",") + s;
+        TestResult("CoZRevRangeByScore 30-10 (m_c,m_b,m_a)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 9. CoZRangeWithScores (pairs format) ──
+    {
+        auto pairs = async_simple::coro::syncAwait(conn.CoZRangeWithScores("db:zset_adv", 0, -1));
+        bool ok = (pairs.size() == 4);
+        if (ok) {
+            ok = ok && pairs[0].first == "m_a" && std::abs(pairs[0].second - 15.0) < 0.001;
+            ok = ok && pairs[1].first == "m_b" && std::abs(pairs[1].second - 20.0) < 0.001;
+            ok = ok && pairs[2].first == "m_c" && std::abs(pairs[2].second - 30.0) < 0.001;
+            ok = ok && pairs[3].first == "m_d" && std::abs(pairs[3].second - 40.0) < 0.001;
+        }
+        std::string detail;
+        for (auto& p : pairs)
+            detail += (detail.empty() ? "" : ", ") + p.first + "=" + std::to_string(p.second);
+        TestResult("CoZRangeWithScores (4 pairs, verify all)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 10. CoZRevRangeWithScores (reversed pairs) ──
+    {
+        auto pairs = async_simple::coro::syncAwait(conn.CoZRevRangeWithScores("db:zset_adv", 0, -1));
+        bool ok = (pairs.size() == 4);
+        if (ok) {
+            ok = ok && pairs[0].first == "m_d" && std::abs(pairs[0].second - 40.0) < 0.001;
+            ok = ok && pairs[1].first == "m_c" && std::abs(pairs[1].second - 30.0) < 0.001;
+            ok = ok && pairs[2].first == "m_b" && std::abs(pairs[2].second - 20.0) < 0.001;
+            ok = ok && pairs[3].first == "m_a" && std::abs(pairs[3].second - 15.0) < 0.001;
+        }
+        std::string detail;
+        for (auto& p : pairs)
+            detail += (detail.empty() ? "" : ", ") + p.first + "=" + std::to_string(p.second);
+        TestResult("CoZRevRangeWithScores (4 pairs, reversed)", ok, detail);
+        if (!ok) ++result;
+    }
+
+    // ── 11. CoZRemRangeByRank 0-1 (remove 2 lowest: m_a, m_b) ──
+    {
+        int64_t removed = async_simple::coro::syncAwait(conn.CoZRemRangeByRank("db:zset_adv", 0, 1));
+        bool ok = (removed == 2);
+        TestResult("CoZRemRangeByRank 0-1 (removed 2)", ok,
+                   "removed=" + std::to_string(removed));
+        if (!ok) ++result;
+
+        int64_t remain = async_simple::coro::syncAwait(conn.CoZCard("db:zset_adv"));
+        TestResult("CoZCard after RemRangeByRank (2 remain)", remain == 2,
+                   "card=" + std::to_string(remain));
+        if (remain != 2) ++result;
+    }
+
+    // ── 12. CoZRemRangeByScore (remove remaining: m_c, m_d) ──
+    {
+        int64_t removed = async_simple::coro::syncAwait(conn.CoZRemRangeByScore("db:zset_adv", 10.0, 50.0));
+        bool ok = (removed == 2);
+        TestResult("CoZRemRangeByScore (removed 2)", ok,
+                   "removed=" + std::to_string(removed));
+        if (!ok) ++result;
+
+        int64_t remain = async_simple::coro::syncAwait(conn.CoZCard("db:zset_adv"));
+        TestResult("CoZCard final (empty)", remain == 0,
+                   "card=" + std::to_string(remain));
+        if (remain != 0) ++result;
+    }
+
+    conn.Disconnect();
+    return result;
+}
+
+// ══════════════════════════════════════════════════════════════════════
 // 新增: Lua 脚本测试
 // ══════════════════════════════════════════════════════════════════════
 
@@ -851,6 +1046,189 @@ int MenuTestRedisAsyncCallback()
         if (std::abs(s - 77.7) >= 0.001) ++result;
     }
 
+    // AsyncZRevRank
+    {
+        // Add zset members with different scores
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z2", 10.0, "a"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z2", 20.0, "b"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z2", 30.0, "c"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z2", 40.0, "d"));
+
+        int64_t rr_a = WaitValue<int64_t>([&](auto cb) {
+            conn.AsyncZRevRank("db:acb_z2", "a",
+                [cb = std::move(cb)](boost::system::error_code ec, int64_t rank) mutable {
+                    cb(ec ? -1 : rank);
+                });
+        });
+        int64_t rr_d = WaitValue<int64_t>([&](auto cb) {
+            conn.AsyncZRevRank("db:acb_z2", "d",
+                [cb = std::move(cb)](boost::system::error_code ec, int64_t rank) mutable {
+                    cb(ec ? -1 : rank);
+                });
+        });
+        bool ok = (rr_a == 3 && rr_d == 0);
+        TestResult("AsyncZRevRank (a=3, d=0)", ok,
+                   "a=" + std::to_string(rr_a) + ", d=" + std::to_string(rr_d));
+        if (!ok) ++result;
+
+        async_simple::coro::syncAwait(conn.CoDel("db:acb_z2"));
+    }
+
+    // AsyncZIncrBy
+    {
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z3", 10.0, "x"));
+
+        double new_score = WaitValue<double>([&](auto cb) {
+            conn.AsyncZIncrBy("db:acb_z3", "x", 5.0,
+                [cb = std::move(cb)](boost::system::error_code ec, double score) mutable {
+                    cb(ec ? -1.0 : score);
+                });
+        });
+        bool ok = std::abs(new_score - 15.0) < 0.001;
+        TestResult("AsyncZIncrBy x+5=15", ok, "score=" + std::to_string(new_score));
+        if (!ok) ++result;
+
+        async_simple::coro::syncAwait(conn.CoDel("db:acb_z3"));
+    }
+
+    // AsyncZRange (with_scores=flat vec), AsyncZRevRange (with_scores)
+    {
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z4", 10.0, "a"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z4", 20.0, "b"));
+
+        // AsyncZRange with_scores=true → flat vector [member, score_str, member, score_str, ...]
+        auto v1 = WaitValue<std::vector<std::string>>([&](auto cb) {
+            conn.AsyncZRange("db:acb_z4", 0, -1, true,
+                [cb = std::move(cb)](boost::system::error_code ec,
+                                     std::vector<std::string> data) mutable {
+                    cb(ec ? std::vector<std::string>{} : std::move(data));
+                });
+        });
+        bool ok = (v1.size() == 4 && v1[0] == "a" && v1[1] == "10" &&
+                   v1[2] == "b" && v1[3] == "20");
+        TestResult("AsyncZRange 0 -1 (with scores, a=10, b=20)", ok);
+        if (!ok) ++result;
+
+        // AsyncZRevRange with_scores=true
+        auto v2 = WaitValue<std::vector<std::string>>([&](auto cb) {
+            conn.AsyncZRevRange("db:acb_z4", 0, -1, true,
+                [cb = std::move(cb)](boost::system::error_code ec,
+                                     std::vector<std::string> data) mutable {
+                    cb(ec ? std::vector<std::string>{} : std::move(data));
+                });
+        });
+        ok = (v2.size() == 4 && v2[0] == "b" && v2[1] == "20" &&
+              v2[2] == "a" && v2[3] == "10");
+        TestResult("AsyncZRevRange 0 -1 (with scores, b=20, a=10)", ok);
+        if (!ok) ++result;
+
+        async_simple::coro::syncAwait(conn.CoDel("db:acb_z4"));
+    }
+
+    // AsyncZRangeWithScores / AsyncZRevRangeWithScores (pair format)
+    {
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z5", 10.0, "a"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z5", 20.0, "b"));
+
+        auto pairs = WaitValue<std::vector<std::pair<std::string, double>>>([&](auto cb) {
+            conn.AsyncZRangeWithScores("db:acb_z5", 0, -1,
+                [cb = std::move(cb)](boost::system::error_code ec,
+                                     std::vector<std::pair<std::string, double>> res) mutable {
+                    cb(ec ? std::vector<std::pair<std::string, double>>{} : std::move(res));
+                });
+        });
+        bool ok = (pairs.size() == 2 && pairs[0].first == "a" && std::abs(pairs[0].second - 10.0) < 0.001 &&
+                   pairs[1].first == "b" && std::abs(pairs[1].second - 20.0) < 0.001);
+        TestResult("AsyncZRangeWithScores (a=10, b=20)", ok);
+        if (!ok) ++result;
+
+        auto rpairs = WaitValue<std::vector<std::pair<std::string, double>>>([&](auto cb) {
+            conn.AsyncZRevRangeWithScores("db:acb_z5", 0, -1,
+                [cb = std::move(cb)](boost::system::error_code ec,
+                                     std::vector<std::pair<std::string, double>> res) mutable {
+                    cb(ec ? std::vector<std::pair<std::string, double>>{} : std::move(res));
+                });
+        });
+        ok = (rpairs.size() == 2 && rpairs[0].first == "b" && std::abs(rpairs[0].second - 20.0) < 0.001 &&
+              rpairs[1].first == "a" && std::abs(rpairs[1].second - 10.0) < 0.001);
+        TestResult("AsyncZRevRangeWithScores (b=20, a=10)", ok);
+        if (!ok) ++result;
+
+        async_simple::coro::syncAwait(conn.CoDel("db:acb_z5"));
+    }
+
+    // AsyncZRangeByScore / AsyncZRevRangeByScore
+    {
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z6", 10.0, "a"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z6", 20.0, "b"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z6", 30.0, "c"));
+
+        auto members = WaitValue<std::vector<std::string>>([&](auto cb) {
+            conn.AsyncZRangeByScore("db:acb_z6", 10.0, 20.0, false,
+                [cb = std::move(cb)](boost::system::error_code ec,
+                                     std::vector<std::string> members) mutable {
+                    cb(ec ? std::vector<std::string>{} : std::move(members));
+                });
+        });
+        bool ok = (members.size() == 2 && members[0] == "a" && members[1] == "b");
+        TestResult("AsyncZRangeByScore 10-20 (a,b)", ok);
+        if (!ok) ++result;
+
+        auto rmembers = WaitValue<std::vector<std::string>>([&](auto cb) {
+            conn.AsyncZRevRangeByScore("db:acb_z6", 20.0, 10.0, false,
+                [cb = std::move(cb)](boost::system::error_code ec,
+                                     std::vector<std::string> members) mutable {
+                    cb(ec ? std::vector<std::string>{} : std::move(members));
+                });
+        });
+        ok = (rmembers.size() == 2 && rmembers[0] == "b" && rmembers[1] == "a");
+        TestResult("AsyncZRevRangeByScore 20-10 (b,a)", ok);
+        if (!ok) ++result;
+
+        // AsyncZRemRangeByRank
+        int64_t removed = WaitValue<int64_t>([&](auto cb) {
+            conn.AsyncZRemRangeByRank("db:acb_z6", 0, 0,
+                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                    cb(ec ? -1 : n);
+                });
+        });
+        ok = (removed == 1);
+        TestResult("AsyncZRemRangeByRank 0-0 (removed 1)", ok, "n=" + std::to_string(removed));
+        if (!ok) ++result;
+
+        // AsyncZRemRangeByScore - remove remaining
+        removed = WaitValue<int64_t>([&](auto cb) {
+            conn.AsyncZRemRangeByScore("db:acb_z6", 20.0, 30.0,
+                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                    cb(ec ? -1 : n);
+                });
+        });
+        ok = (removed == 2);
+        TestResult("AsyncZRemRangeByScore 20-30 (removed 2)", ok, "n=" + std::to_string(removed));
+        if (!ok) ++result;
+
+        async_simple::coro::syncAwait(conn.CoDel("db:acb_z6"));
+    }
+
+    // AsyncZCount
+    {
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z7", 10.0, "a"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z7", 20.0, "b"));
+        async_simple::coro::syncAwait(conn.CoZAdd("db:acb_z7", 30.0, "c"));
+
+        int64_t cnt = WaitValue<int64_t>([&](auto cb) {
+            conn.AsyncZCount("db:acb_z7", 10.0, 20.0,
+                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                    cb(ec ? -1 : n);
+                });
+        });
+        bool ok = (cnt == 2);
+        TestResult("AsyncZCount 10-20 (2)", ok, "n=" + std::to_string(cnt));
+        if (!ok) ++result;
+
+        async_simple::coro::syncAwait(conn.CoDel("db:acb_z7"));
+    }
+
     // AsyncExpire / AsyncTTL
     {
         async_simple::coro::syncAwait(conn.CoSet("db:acb_exp", "ev"));
@@ -894,6 +1272,8 @@ int MenuTestRedisAsyncCallback()
         TestResult("AsyncExists db:acb_incr", ex);
         if (!ex) ++result;
     }
+
+    // Note: temp keys db:acb_z2..z7 are CoDel'd inline after each test block.
 
     // Data left for inspection
     std::cout << "  [DATA] db:acb_h, db:acb_l, db:acb_z, db:acb_exp, db:acb_incr\n";

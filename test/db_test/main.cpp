@@ -38,6 +38,7 @@ int MenuTestRedisHash();
 int MenuTestRedisList();
 int MenuTestRedisZSet();
 int MenuTestRedisZSetRange();
+int MenuTestRedisZSetAdv();
 int MenuTestRedisLuaScript();
 int MenuTestRedisExpire();
 int MenuTestRedisAsyncCallback();
@@ -81,36 +82,37 @@ struct MenuItem {
 };
 
 static const MenuItem MENU[] = {
-    // ── Redis 测试 (12 项) ──
+    // ── Redis 测试 (13 项) ──
     { 1,  "Redis Ping",                          MenuTestRedisPing },
     { 2,  "Redis KV (Set/Get/Del/Exists/Incr)",  MenuTestRedisKV },
     { 3,  "Redis Hash (HSet/HGet/HDel/HLen)",    MenuTestRedisHash },
     { 4,  "Redis List (LPush/RPush/LPop/RPop)",  MenuTestRedisList },
     { 5,  "Redis Sorted Set (ZAdd/ZCard/ZScore)", MenuTestRedisZSet },
     { 6,  "Redis ZSET Range (index+score verify)",MenuTestRedisZSetRange },
-    { 7,  "Redis Lua Script (redis.call)",        MenuTestRedisLuaScript },
-    { 8,  "Redis Expire / TTL",                  MenuTestRedisExpire },
-    { 9,  "Redis Async Callback API",            MenuTestRedisAsyncCallback },
-    { 10, "Redis AsyncCall / AsyncEval",         MenuTestRedisAsyncCallEval },
-    { 11, "Redis Error Handling",                MenuTestRedisErrorCases },
-    { 12, "Redis Connection Lifecycle",          MenuTestRedisLifecycle },
-    // ── PostgreSQL 测试 (6 项) ──
-    { 13, "PG AsyncConnect / AsyncClose",        MenuTestPgConnectClose },
-    { 14, "PG AsyncQuery",                       MenuTestPgQuery },
-    { 15, "PG AsyncExecute",                     MenuTestPgExecute },
-    { 16, "PG Transaction (Begin/Commit/Rollback)", MenuTestPgTransaction },
-    { 17, "PG Subquery (IN, EXISTS)",            MenuTestPgSubquery },
-    { 18, "PG JOIN (INNER, LEFT, RIGHT, UNION)", MenuTestPgJoin },
-    { 19, "PG Coroutine Query/Execute",          MenuTestPgCoroQuery },
-    { 20, "PG Coroutine Transaction",            MenuTestPgCoroTransaction },
+    { 7,  "Redis ZSET Advanced (Co*/Async*)",    MenuTestRedisZSetAdv },
+    { 8,  "Redis Lua Script (redis.call)",        MenuTestRedisLuaScript },
+    { 9,  "Redis Expire / TTL",                  MenuTestRedisExpire },
+    { 10, "Redis Async Callback API",            MenuTestRedisAsyncCallback },
+    { 11, "Redis AsyncCall / AsyncEval",         MenuTestRedisAsyncCallEval },
+    { 12, "Redis Error Handling",                MenuTestRedisErrorCases },
+    { 13, "Redis Connection Lifecycle",          MenuTestRedisLifecycle },
+    // ── PostgreSQL 测试 (8 项) ──
+    { 14, "PG AsyncConnect / AsyncClose",        MenuTestPgConnectClose },
+    { 15, "PG AsyncQuery",                       MenuTestPgQuery },
+    { 16, "PG AsyncExecute",                     MenuTestPgExecute },
+    { 17, "PG Transaction (Begin/Commit/Rollback)", MenuTestPgTransaction },
+    { 18, "PG Subquery (IN, EXISTS)",            MenuTestPgSubquery },
+    { 19, "PG JOIN (INNER, LEFT, RIGHT, UNION)", MenuTestPgJoin },
+    { 20, "PG Coroutine Query/Execute",          MenuTestPgCoroQuery },
+    { 21, "PG Coroutine Transaction",            MenuTestPgCoroTransaction },
     // ── Lua Script 测试 (1 项) ──
-    { 21, "Lua Redis/PG Bindings",              MenuTestLuaScriptBindings },
+    { 22, "Lua Redis/PG Bindings",              MenuTestLuaScriptBindings },
 };
 
-static constexpr int REDIS_COUNT = 12;
+static constexpr int REDIS_COUNT = 13;
 static constexpr int PG_COUNT    = 8;
 static constexpr int LUA_COUNT   = 1;
-static constexpr int MENU_COUNT  = REDIS_COUNT + PG_COUNT + LUA_COUNT;  // 21
+static constexpr int MENU_COUNT  = REDIS_COUNT + PG_COUNT + LUA_COUNT;  // 22
 
 static void ShowMenu()
 {
