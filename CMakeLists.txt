@@ -51,6 +51,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
 # add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
 add_subdirectory(test/server_test)
 add_subdirectory(test/client_test)
+add_subdirectory(test/db_test)
 
 # Game server processes
 add_subdirectory(server/login_server)

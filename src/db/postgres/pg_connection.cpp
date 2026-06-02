@@ -164,7 +164,7 @@ async_simple::coro::Lazy<bool> PgConnection::Reset()
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, config_,
+    boost::asio::post(io_ctx_, [this, self,
                                 promise = std::move(promise)]() mutable {
         CloseSync();
         promise.setValue(ConnectSync(config_));
@@ -287,7 +287,7 @@ std::string PgConnection::BuildConnString(const DbConfig& cfg)
 {
     std::ostringstream ss;
     ss << "host=" << cfg.host;
-    ss << " port=" << (cfg.port > 0 ? cfg.port : DefaultPort(DbType::POSTGRESQL));
+    ss << " port=" << (cfg.port > 0 ? cfg.port : DbConfig::DefaultPort(DbType::POSTGRESQL));
     ss << " user=" << cfg.user;
     ss << " password=" << cfg.password;
     ss << " dbname=" << cfg.database;
