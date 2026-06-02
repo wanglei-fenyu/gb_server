@@ -89,10 +89,11 @@ async_simple::coro::Lazy<bool> PgConnection::Reset()
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, config_,
+    auto cfg = config_;
+    boost::asio::post(io_ctx_, [this, self, cfg,
                                 promise = std::move(promise)]() mutable {
         CloseSync();
-        promise.setValue(ConnectSync(config_));
+        promise.setValue(ConnectSync(cfg));
     });
 
     co_return co_await std::move(future);
@@ -196,6 +197,83 @@ async_simple::coro::Lazy<void> PgConnection::Rollback()
 }
 
 // =========================================================================
+// 异步回调 API — 在 IO 线程上同步执行后回调
+// =========================================================================
+
+void PgConnection::AsyncConnect(const DbConfig& cfg, std::function<void(bool)> callback)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cfg, cb = std::move(callback)]() mutable {
+        cb(ConnectSync(cfg));
+    });
+}
+
+void PgConnection::AsyncClose(std::function<void()> callback)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+        CloseSync();
+        cb();
+    });
+}
+
+void PgConnection::AsyncQuery(std::string_view sql, std::function<void(DbResult)> callback)
+{
+    auto self = shared_from_this();
+    std::string sql_str(sql);
+    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+                                cb = std::move(callback)]() mutable {
+        cb(SyncQuery(sql.c_str()));
+    });
+}
+
+void PgConnection::AsyncQuery(std::string_view sql, const std::vector<DbValue>& params,
+                              std::function<void(DbResult)> callback)
+{
+    auto self = shared_from_this();
+    std::string sql_str(sql);
+    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+                                params, cb = std::move(callback)]() mutable {
+        cb(SyncExecParams(sql.c_str(), params));
+    });
+}
+
+void PgConnection::AsyncExecute(std::string_view sql, std::function<void(uint64_t)> callback)
+{
+    auto self = shared_from_this();
+    std::string sql_str(sql);
+    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+                                cb = std::move(callback)]() mutable {
+        DbResult r = SyncQuery(sql.c_str());
+        cb(r.is_ok() ? r.affected_rows() : 0);
+    });
+}
+
+void PgConnection::AsyncBegin(std::function<void(bool)> callback)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+        cb(SyncCommand("BEGIN"));
+    });
+}
+
+void PgConnection::AsyncCommit(std::function<void(bool)> callback)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+        cb(SyncCommand("COMMIT"));
+    });
+}
+
+void PgConnection::AsyncRollback(std::function<void(bool)> callback)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+        cb(SyncCommand("ROLLBACK"));
+    });
+}
+
+// =========================================================================
 // 内部 — 同步 libpq 操作（在 IO 线程上执行）
 // =========================================================================
 
@@ -212,7 +290,7 @@ std::string PgConnection::BuildConnString(const DbConfig& cfg)
 {
     std::ostringstream ss;
     ss << "host=" << cfg.host;
-    ss << " port=" << (cfg.port > 0 ? cfg.port : DefaultPort(DbType::POSTGRESQL));
+    ss << " port=" << (cfg.port > 0 ? cfg.port : DbConfig::DefaultPort(DbType::POSTGRESQL));
     ss << " user=" << cfg.user;
     ss << " password=" << cfg.password;
     ss << " dbname=" << cfg.database;

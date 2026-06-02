@@ -1,11 +1,12 @@
 #pragma once
-#include "db/db_connection.h"
-#include "db/db_config.h"
-#include "db/db_result.h"
+#include "db_connection.h"
+#include "db_config.h"
+#include "db_result.h"
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
 #include <libpq-fe.h>
 #include <boost/asio/io_context.hpp>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -41,7 +42,7 @@ public:
     // ── 同步接口（供连接池在 IO 线程上使用） ──────────────────────────────
 
     /// 同步关闭（线程安全）。
-    void CloseSync() override;
+    void CloseSync();
 
     /// 同步连接（在 IO 线程上直接阻塞调用，不经过 Promise/Future）。
     bool ConnectSync(const DbConfig& cfg);
@@ -54,6 +55,33 @@ public:
     async_simple::coro::Lazy<void>          Begin() override;
     async_simple::coro::Lazy<void>          Commit() override;
     async_simple::coro::Lazy<void>          Rollback() override;
+
+    // ── 异步回调 API（供 Lua 桥接使用，在 PG IO 线程上执行同步操作后回调） ──
+
+    /// 异步连接，完成后回调 ok(bool)。
+    void AsyncConnect(const DbConfig& cfg, std::function<void(bool)> callback);
+
+    /// 异步关闭，完成后回调。
+    void AsyncClose(std::function<void()> callback);
+
+    /// 异步查询，无参数。
+    void AsyncQuery(std::string_view sql, std::function<void(DbResult)> callback);
+
+    /// 异步参数化查询。
+    void AsyncQuery(std::string_view sql, const std::vector<DbValue>& params,
+                    std::function<void(DbResult)> callback);
+
+    /// 异步 DML 执行。
+    void AsyncExecute(std::string_view sql, std::function<void(uint64_t)> callback);
+
+    /// 异步 BEGIN。
+    void AsyncBegin(std::function<void(bool)> callback);
+
+    /// 异步 COMMIT。
+    void AsyncCommit(std::function<void(bool)> callback);
+
+    /// 异步 ROLLBACK。
+    void AsyncRollback(std::function<void(bool)> callback);
 
 private:
     // ── 同步操作（在 IO 线程上执行） ──────────────────────────────────────
@@ -71,6 +99,8 @@ private:
     static DbResult ParseResult(PGresult* res);
     /// 将 libpq 文本值转为 DbValue。
     static DbValue ToDbValue(const char* value, Oid type_oid);
+    /// 构建连接字符串。
+    std::string BuildConnString(const DbConfig& cfg);
 
 private:
     boost::asio::io_context&           io_ctx_;
