@@ -8,8 +8,6 @@
 #include "concurrentqueue.h"
 #include "timer/timer_manager.h"
 #include <atomic>
-#include <condition_variable>
-#include <mutex>
 #include <chrono>
 #include <future>
 #include <unordered_map>
@@ -107,8 +105,6 @@ private:
     std::unique_ptr<TimerManager> timer_manager_;
 	std::atomic<bool> runing_ = false;
     std::atomic<bool> shutting_down_ = false;
-    std::mutex event_mutex_;
-    std::condition_variable event_cv_;
 
     std::shared_ptr<IWorkerLogic> worker_logic_;
     std::shared_ptr<WorkerExecutor> executor_;

@@ -53,38 +53,29 @@ void Worker::OnStart()
 
 void Worker::Run()
 {
+    // 与主线程 App::Run() 保持一致的定帧节奏：
+    // 每帧排空任务队列后，固定睡满剩余帧时间，不提前唤醒。
     auto last_frame_time = std::chrono::steady_clock::now();
-    while (true)
+    while (runing_.load())
     {
-        if (!runing_.load())
-        {
-            // 优雅关闭：退出前处理完剩余任务
-            std::function<void()> func;
-            if (!events_.try_dequeue(func))
-                break;
-            if (func)
-                func();
-            continue;
-        }
-
-        // 计算自上一帧以来的时间
-        auto                        frame_start = std::chrono::steady_clock::now();
-        std::chrono::duration<float> elapsed    = frame_start - last_frame_time;
-        last_frame_time                        = frame_start;
+        auto                         frame_start = std::chrono::steady_clock::now();
+        std::chrono::duration<float> elapsed     = frame_start - last_frame_time;
+        last_frame_time                          = frame_start;
 
         ProcessFrame(elapsed.count());
 
-        // 帧率控制：等待剩余帧时间
-        // cv notify_one（来自 EnqueueTask）提前唤醒以立即处理任务
         auto frame_time = std::chrono::steady_clock::now() - frame_start;
         auto remaining  = frame_duration_ - frame_time;
         if (remaining > std::chrono::milliseconds::zero())
-        {
-            std::unique_lock<std::mutex> lk(event_mutex_);
-            event_cv_.wait_for(lk, remaining, [this]() {
-                return !runing_.load() || events_.size_approx() > 0;
-            });
-        }
+            std::this_thread::sleep_for(remaining);
+    }
+
+    // 优雅退出：退出循环后排空剩余任务
+    std::function<void()> func;
+    while (events_.try_dequeue(func))
+    {
+        if (func)
+            func();
     }
 }
 
@@ -103,8 +94,6 @@ void Worker::SetFrameRate(int fps)
 void Worker::Stop()
 {
      runing_.store(false);
-     event_cv_.notify_all();
-
 }
 
 void Worker::EnterShutdownMode()
@@ -290,7 +279,6 @@ bool Worker::EnqueueTask(std::function<void(void)>&& handler, bool force)
         return false;
 
     events_.enqueue(std::move(handler));
-    event_cv_.notify_one();
     return true;
 }
 
