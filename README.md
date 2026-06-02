@@ -29,9 +29,10 @@ c++ 网络游戏服务器框架
 ## 可执行文件
 
 | 目标 | 入口 | 基类 | 用途 |
-|---|---|---|---|
+|---|---|---|---|---|
 | `server_test` | `test/server_test/main.cpp` | `App` | 开发测试服务端 |
 | `client_test` | `test/client_test/main.cpp` | `App` | 开发测试客户端 |
+| `db_test` | `test/db_test/main.cpp` | 无（独立控制台） | 数据库/Redis 集成测试 |
 | `login_server` | `server/login_server/main.cpp` | `ServerApp` | 登录服务器 |
 | `gateway_server` | `server/gateway_server/main.cpp` | `ServerApp` | 网关服务器 |
 | `scene_server` | `server/scene_server/main.cpp` | `ServerApp` | 场景服务器 |
@@ -1168,6 +1169,7 @@ server/                  — 正式服务器进程
 test/                    — 测试进程
   server_test/           — server test (App)
   client_test/           — client test (App)
+  db_test/               — 数据库集成测试（独立控制台，不依赖 App）
 
 res/                     — 资源文件
   config/server_config.xml  — IP/Port 配置
@@ -1176,7 +1178,8 @@ script/                  — Lua 脚本（顶层）
   main.lua               — 入口脚本
   test.lua               — RPC 测试
   test_db.lua            — 数据库测试启动入口
-  db_test_lua_redis_pg.lua— Redis + PostgreSQL 测试
+  db_test_lua_redis_pg.lua— Redis + PostgreSQL 测试（含协程桥接）
+  db_test_lua_test.lua   — Lua 脚本绑定基础测试
   LuaPanda.lua           — LuaPanda 调试器
 protobuf/                — 生成的 .pb.h/.pb.cc
 cmake/                   — 构建工具函数

@@ -64,7 +64,7 @@ Every executable (test or server) follows the same pattern:
 5. `conan_link_libraries(target)` — links via the macro in `def.cmake`
 6. `copy_dlls_to_target(target)` — copies DLLs on Windows
 
-Binaries produced: `server_test`, `client_test`, `login_server`, `gateway_server`, `scene_server`.
+Binaries produced: `server_test`, `client_test`, `db_test`, `login_server`, `gateway_server`, `scene_server`.
 
 ## Architecture overview
 
@@ -94,7 +94,7 @@ server/scene_server/main.cpp  ← scene server (SceneApp extends ServerApp)
        │    └─ IoServicePool → N io_service threads
        ├─ Protobuf (protobuf/)  ← generated .pb.h/.pb.cc from res/proto/*.proto
        ├─ Lua scripting (script/main.lua, src/script/)
-       ├─ DB modules (src/db/mysql/, src/db/redis/)
+       ├─ DB modules (src/db/redis/, src/db/postgres/)
        ├─ HTTP client/server (src/network/http/)
        ├─ Async (src/async/) — ShutdownManager, SignalHandler
        ├─ Timer (src/timer/) — Timer, TimerManager, SteadyTimer, SystemTimer
@@ -143,7 +143,7 @@ Server presets in `start_process.bat`: login=8, scene=32, gateway=64.
 
 **Key architectural facts:**
 - All binaries include **every source file** from `src/` via glob — no per-file selection.
-- There are **5 executables**: `server_test`, `client_test`, `login_server`, `gateway_server`, `scene_server`.
+- There are **6 executables**: `server_test`, `client_test`, `db_test`, `login_server`, `gateway_server`, `scene_server`.
 - Each worker has its own Lua state (sol::state). Main worker runs the frame loop; normal workers process posted tasks.
 - Router assigns messages to workers by `MessageType % 10000` → `ServiceWorkerType` (Normal=0, AI=1, Navigation=2).
 - Graceful shutdown is 4 phases: stop IO → drain pending tasks → complete timer frame → cleanup.
@@ -181,6 +181,7 @@ Server presets in `start_process.bat`: login=8, scene=32, gateway=64.
 | RapidJSON | 1.1.0 | JSON parsing (HTTP module) |
 | rapidxml | 1.13 | XML parsing (server config) |
 | cxxopts | 3.3.1 | CLI option parsing |
+| libpq | 17.7 | PostgreSQL client library (Lua binding) |
 
 **gbnet** is a custom dependency hosted at `https://github.com/wanglei-fenyu/gbnet_conan.git`. It provides `MessageStream`, `Buffer`, `CompressedStream`, and IO primitives. Also managed via `3rd/packages.json`.
 
@@ -206,8 +207,8 @@ src/
     timer_help.h     — CHRONO_SECOND/MICROSECOND macros (Asio compat)
     util_string.h    — string format, trim, replace, split
   db/
-    mysql/           — mysql test examples (mysql_test.cpp/.h)
-    redis/           — redis test examples (redis_test.cpp/.h)
+    redis/           — Redis connection pool + Lua binding (Boost.Redis)
+    postgres/        — PostgreSQL connection + Lua binding (libpq)
   log/
     log.h/.cpp       — GbLog (spdlog wrapper), LOG_* macros, CHECK macros
   network/
@@ -263,7 +264,9 @@ test/
   server_test/        — server binary (MyApp extends App directly)
     main.cpp, MyApp.h/.cpp, test.h/.cpp
   client_test/        — client binary (MyApp extends App directly)
-    main.cpp, MyApp.h/.cpp, test.h/.cpp, mysql_test_exmple.h/.cpp, redis_test_exmple.h/.cpp
+    main.cpp, MyApp.h/.cpp, test.h/.cpp
+  db_test/            — standalone DB/Redis integration test (no App/Worker)
+    main.cpp, lua_test.h/.cpp, redis_test.h/.cpp, pg_test.h/.cpp, report.h
 
 server/               — **NEW** dedicated game server processes
   login_server/       — LoginApp extends ServerApp, includes HttpServer
@@ -290,6 +293,9 @@ script/               — **NEW at top level** (moved from res/script/)
   main.lua            — loaded at worker startup: msgpack test, RPC registration, Listen
   start_debug.lua     — LuaPanda debugger starter (127.0.0.1:8828)
   test.lua            — RPC call test script
+  test_db.lua         — Redis + PostgreSQL Lua integration test suite (coroutine + callback)
+  db_test_lua_redis_pg.lua — full Redis/PG binding test (loaded by db_test)
+  db_test_lua_test.lua     — basic Lua-C++ binding test (loaded by db_test)
   LuaPanda.lua        — LuaPanda debugger
 
 protobuf/             — **NEW at root**: generated .pb.h/.pb.cc output directory
@@ -318,7 +324,7 @@ The current `src/` layout has been restructured from an older layout:
 
 ## Testing
 
-- **5 executable targets**: `server_test`, `client_test`, `login_server`, `gateway_server`, `scene_server`.
+- **6 executable targets**: `server_test`, `client_test`, `db_test`, `login_server`, `gateway_server`, `scene_server`.
 - All include **every source file** from `src/` via glob — no per-file selection.
 - To add a new server binary, copy the `server/*/CMakeLists.txt` pattern and add it to root `CMakeLists.txt`.
 - Run: after building, `start_process.bat -s <preset> -t Debug` (presets: login, gateway, scene, server_test).
