@@ -48,6 +48,81 @@ bool PgConnection::ConnectSync(const DbConfig& cfg)
     return true;
 }
 
+void PgConnection::AsyncConnect(const DbConfig& cfg, std::function<void(bool)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cfg, cb = std::move(cb)]() mutable {
+        bool ok = ConnectSync(cfg);
+        if (cb) cb(ok);
+    });
+}
+
+void PgConnection::AsyncQuery(const std::string& sql, std::function<void(DbResult)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, sql, cb = std::move(cb)]() mutable {
+        DbResult res = SyncQuery(sql.c_str());
+        if (cb) cb(std::move(res));
+    });
+}
+
+void PgConnection::AsyncQuery(const std::string& sql,
+                              const std::vector<DbValue>& params,
+                              std::function<void(DbResult)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, sql, params, cb = std::move(cb)]() mutable {
+        DbResult res = SyncExecParams(sql.c_str(), params);
+        if (cb) cb(std::move(res));
+    });
+}
+
+void PgConnection::AsyncExecute(const std::string& sql, std::function<void(uint64_t)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, sql, cb = std::move(cb)]() mutable {
+        DbResult res = SyncQuery(sql.c_str());
+        uint64_t n = res.is_ok() ? res.affected_rows() : 0;
+        if (cb) cb(n);
+    });
+}
+
+void PgConnection::AsyncBegin(std::function<void(bool)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(cb)]() mutable {
+        bool ok = SyncCommand("BEGIN");
+        if (cb) cb(ok);
+    });
+}
+
+void PgConnection::AsyncCommit(std::function<void(bool)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(cb)]() mutable {
+        bool ok = SyncCommand("COMMIT");
+        if (cb) cb(ok);
+    });
+}
+
+void PgConnection::AsyncRollback(std::function<void(bool)> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(cb)]() mutable {
+        bool ok = SyncCommand("ROLLBACK");
+        if (cb) cb(ok);
+    });
+}
+
+void PgConnection::AsyncClose(std::function<void()> cb)
+{
+    auto self = shared_from_this();
+    boost::asio::post(io_ctx_, [this, self, cb = std::move(cb)]() mutable {
+        CloseSync();
+        if (cb) cb();
+    });
+}
+
 async_simple::coro::Lazy<bool> PgConnection::Connect(const DbConfig& cfg)
 {
     async_simple::Promise<bool> promise;

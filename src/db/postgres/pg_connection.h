@@ -6,6 +6,7 @@
 #include "async_simple/Promise.h"
 #include <libpq-fe.h>
 #include <boost/asio/io_context.hpp>
+#include <functional>
 #include <memory>
 #include <string>
 
@@ -40,8 +41,29 @@ public:
 
     // ── 同步接口（供连接池在 IO 线程上使用） ──────────────────────────────
 
+    /// 异步连接（回调在 PG IO 线程执行）。
+    void AsyncConnect(const DbConfig& cfg, std::function<void(bool)> cb);
+
+    /// 异步查询（无参数，回调在 PG IO 线程执行）。
+    void AsyncQuery(const std::string& sql, std::function<void(DbResult)> cb);
+
+    /// 异步参数化查询（回调在 PG IO 线程执行）。
+    void AsyncQuery(const std::string& sql, const std::vector<DbValue>& params,
+                    std::function<void(DbResult)> cb);
+
+    /// 异步 DML（回调返回影响行数，回调在 PG IO 线程执行）。
+    void AsyncExecute(const std::string& sql, std::function<void(uint64_t)> cb);
+
+    /// 异步事务命令（回调在 PG IO 线程执行）。
+    void AsyncBegin(std::function<void(bool)> cb);
+    void AsyncCommit(std::function<void(bool)> cb);
+    void AsyncRollback(std::function<void(bool)> cb);
+
+    /// 异步关闭（回调在 PG IO 线程执行）。
+    void AsyncClose(std::function<void()> cb);
+
     /// 同步关闭（线程安全）。
-    void CloseSync() override;
+    void CloseSync();
 
     /// 同步连接（在 IO 线程上直接阻塞调用，不经过 Promise/Future）。
     bool ConnectSync(const DbConfig& cfg);
@@ -66,6 +88,9 @@ private:
 
     /// 同步命令（BEGIN/COMMIT/ROLLBACK）。
     bool SyncCommand(const char* sql);
+
+    /// 构造 libpq 连接串。
+    static std::string BuildConnString(const DbConfig& cfg);
 
     /// 将 PGresult 解析为 DbResult。
     static DbResult ParseResult(PGresult* res);
