@@ -199,6 +199,8 @@ static void register_msgpack(std::shared_ptr<Script>& scriptPtr)
 }
 
 extern void register_proto_msg(std::shared_ptr<Script>& scriptPtr);
+extern void register_redis(std::shared_ptr<Script>& scriptPtr);
+extern void register_postgresql(std::shared_ptr<Script>& scriptPtr);
 
 void _lua_(std::shared_ptr<Script>& scriptPtr)
 {
@@ -206,5 +208,6 @@ void _lua_(std::shared_ptr<Script>& scriptPtr)
 	register_msgpack(scriptPtr);
     register_proto_msg(scriptPtr);
 	register_net(scriptPtr);
-	
+    register_redis(scriptPtr);
+    register_postgresql(scriptPtr);
 }
