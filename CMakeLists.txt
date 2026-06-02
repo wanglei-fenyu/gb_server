@@ -32,6 +32,7 @@ find_package(RapidJSON  REQUIRED)
 find_package(rapidxml REQUIRED)
 find_package(sol2 REQUIRED)
 find_package(cxxopts REQUIRED)
+find_package(PostgreSQL REQUIRED)
 
 # 定义全局编译宏
 add_compile_definitions(
@@ -55,3 +56,4 @@ add_subdirectory(test/client_test)
 add_subdirectory(server/login_server)
 add_subdirectory(server/gateway_server)
 add_subdirectory(server/scene_server)
+
