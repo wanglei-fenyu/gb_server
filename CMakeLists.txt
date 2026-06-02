@@ -7,6 +7,13 @@ list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/generators")
 # 项目定义
 project(GBServer)
 
+if(MSVC)
+    # def.cmake 中的 MSVC 标志在 project() 之前被引入，MSVC 变量尚未设置，
+    # 导致其中的 add_compile_options(/EHa) 被静默跳过。
+    # 详见: cmake/def.cmake 中 if(MSVC) 块。
+    add_compile_options(/EHa)
+endif()
+
 # 引入 Conan toolchain
 if(EXISTS ${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
     include(${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
