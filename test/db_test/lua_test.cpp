@@ -165,6 +165,7 @@ int MenuTestLuaScriptBindings()
     run_test("Redis AsyncExpire/AsyncTTL",  "test_redis_expire_ttl", "redis_state");
     run_test("Redis AsyncExists",           "test_redis_exists",     "redis_state");
     run_test("Redis AsyncLPush/AsyncLPop",  "test_redis_list",       "redis_state");
+    run_test("Redis AsyncZSet (adv sorted set)", "test_redis_zset_adv", "redis_state");
 
     // ═══════════════════════════════════════════════════════════════════
     // PostgreSQL Lua 绑定测试
@@ -188,6 +189,7 @@ int MenuTestLuaScriptBindings()
     run_test("Redis coro AsyncIncr",             "test_redis_incr_coro",       "redis_state");
     run_test("Redis coro AsyncExpire/AsyncTTL",  "test_redis_expire_ttl_coro", "redis_state");
     run_test("Redis coro AsyncLPush/AsyncLPop",  "test_redis_list_coro",       "redis_state");
+    run_test("Redis coro AsyncZSet (adv sorted set)", "test_redis_zset_adv_coro", "redis_state");
 
     std::cout << "\n  --- PostgreSQL Lua coroutine tests ---" << std::endl;
 

@@ -256,6 +256,143 @@ function test_redis_list()
     end)
 end
 
+-- ── 9. AsyncZRevRank / AsyncZCount / AsyncZIncrBy / AsyncZRange / etc. ──
+function test_redis_zset_adv()
+    reset_redis()
+    local key = "db_test_lua_zadv"
+
+    -- Cleanup then add 4 members
+    redis.AsyncDel(key, function()
+        redis.AsyncZAdd(key, 10.0, "m_a", function()
+            redis.AsyncZAdd(key, 20.0, "m_b", function()
+                redis.AsyncZAdd(key, 30.0, "m_c", function()
+                    redis.AsyncZAdd(key, 40.0, "m_d", function()
+
+                        -- Step 1: ZRevRank
+                        redis.AsyncZRevRank(key, "m_a", function(e1, r1)
+                            if e1 ~= "" or r1 ~= 3 then
+                                redis_state.msg  = string.format("ZRevRank m_a: got rank=%d", r1 or -1)
+                                redis_state.done = true
+                                return
+                            end
+                            redis.AsyncZRevRank(key, "m_d", function(e1b, r1b)
+                                if e1b ~= "" or r1b ~= 0 then
+                                    redis_state.msg  = string.format("ZRevRank m_d: got rank=%d", r1b or -1)
+                                    redis_state.done = true
+                                    return
+                                end
+
+                                -- Step 2: ZCount 10-30 → 3
+                                redis.AsyncZCount(key, 10.0, 30.0, function(e2, c2)
+                                    if e2 ~= "" or c2 ~= 3 then
+                                        redis_state.msg  = string.format("ZCount 10-30: got %d", c2 or -1)
+                                        redis_state.done = true
+                                        return
+                                    end
+
+                                    -- Step 3: ZIncrBy m_a +5 → 15.0
+                                    redis.AsyncZIncrBy(key, "m_a", 5.0, function(e3, s3)
+                                        if e3 ~= "" or math.abs(s3 - 15.0) >= 0.001 then
+                                            redis_state.msg  = string.format("ZIncrBy m_a+5: got %.1f", s3 or -1)
+                                            redis_state.done = true
+                                            return
+                                        end
+
+                                        -- Step 4: ZRange 0 -1 → 4 members
+                                        redis.AsyncZRange(key, 0, -1, false, function(e4, m4)
+                                            if e4 ~= "" or #m4 ~= 4 then
+                                                redis_state.msg = string.format("ZRange 0 -1: got %d members", #(m4 or {}))
+                                                redis_state.done = true
+                                                return
+                                            end
+
+                                            -- Step 5: ZRange with scores → 8 elements
+                                            redis.AsyncZRange(key, 0, -1, true, function(e5, m5)
+                                                if e5 ~= "" or #m5 ~= 8 then
+                                                    redis_state.msg = string.format("ZRange with_scores: got %d", #(m5 or {}))
+                                                    redis_state.done = true
+                                                    return
+                                                end
+
+                                                -- Step 6: ZRevRange → 4 reversed
+                                                redis.AsyncZRevRange(key, 0, -1, false, function(e6, m6)
+                                                    if e6 ~= "" or #m6 ~= 4 then
+                                                        redis_state.msg = string.format("ZRevRange: got %d", #(m6 or {}))
+                                                        redis_state.done = true
+                                                        return
+                                                    end
+
+                                                    -- Step 7: ZRangeByScore 10-30 → 3
+                                                    redis.AsyncZRangeByScore(key, 10.0, 30.0, false, function(e7, m7)
+                                                        if e7 ~= "" or #m7 ~= 3 then
+                                                            redis_state.msg = string.format("ZRangeByScore: got %d", #(m7 or {}))
+                                                            redis_state.done = true
+                                                            return
+                                                        end
+
+                                                        -- Step 8: ZRevRangeByScore 30-10 → 3 reversed
+                                                        redis.AsyncZRevRangeByScore(key, 30.0, 10.0, false, function(e8, m8)
+                                                            if e8 ~= "" or #m8 ~= 3 then
+                                                                redis_state.msg = string.format("ZRevRangeByScore: got %d", #(m8 or {}))
+                                                                redis_state.done = true
+                                                                return
+                                                            end
+
+                                                            -- Step 9: ZRangeWithScores → 4 pairs
+                                                            redis.AsyncZRangeWithScores(key, 0, -1, function(e9, p9)
+                                                                if e9 ~= "" or #p9 ~= 4 or p9[1].member == nil or p9[1].score == nil then
+                                                                    redis_state.msg = string.format("ZRangeWithScores: got %d pairs", #(p9 or {}))
+                                                                    redis_state.done = true
+                                                                    return
+                                                                end
+
+                                                                -- Step 10: ZRevRangeWithScores
+                                                                redis.AsyncZRevRangeWithScores(key, 0, -1, function(e10, p10)
+                                                                    if e10 ~= "" or #p10 ~= 4 or p10[1].member == nil then
+                                                                        redis_state.msg = string.format("ZRevRangeWithScores: got %d", #(p10 or {}))
+                                                                        redis_state.done = true
+                                                                        return
+                                                                    end
+
+                                                                    -- Step 11: ZRemRangeByRank 0-1 → remove 2
+                                                                    redis.AsyncZRemRangeByRank(key, 0, 1, function(e11, r11)
+                                                                        if e11 ~= "" or r11 ~= 2 then
+                                                                            redis_state.msg = string.format("ZRemRangeByRank: got %d", r11 or -1)
+                                                                            redis_state.done = true
+                                                                            return
+                                                                        end
+
+                                                                        -- Step 12: ZRemRangeByScore → remove rest
+                                                                        redis.AsyncZRemRangeByScore(key, 10.0, 100.0, function(e12, r12)
+                                                                            redis_state.done = true
+                                                                            if e12 ~= "" then
+                                                                                redis_state.msg = "ZRemRangeByScore error: " .. e12
+                                                                            elseif r12 < 1 then
+                                                                                redis_state.msg = string.format("ZRemRangeByScore: got %d", r12 or -1)
+                                                                            else
+                                                                                redis_state.ok  = true
+                                                                                redis_state.msg = string.format("ok (all %d adv zset tests passed)", 12)
+                                                                            end
+                                                                        end)
+                                                                    end)
+                                                                end)
+                                                            end)
+                                                        end)
+                                                    end)
+                                                end)
+                                            end)
+                                        end)
+                                    end)
+                                end)
+                            end)
+                        end)
+                    end)
+                end)
+            end)
+        end)
+    end)
+end
+
 
 -- ═══════════════════════════════════════════════════════════════════
 -- PostgreSQL 测试
@@ -586,6 +723,108 @@ function test_redis_list_coro()
             redis_state.msg = "coro LPop error: " .. err3
         elseif val ~= "a" then
             redis_state.msg = "coro LPop expected 'a', got '" .. tostring(val) .. "'"
+        else
+            redis_state.ok  = true
+            redis_state.msg = "ok"
+        end
+    end)
+    coroutine.resume(co)
+end
+
+function test_redis_zset_adv_coro()
+    reset_redis()
+    local co = coroutine.create(function()
+        local key = "db_test_lua_zadv_coro"
+
+        redis.Await("Del", key)
+        redis.Await("ZAdd", key, 10.0, "m_a")
+        redis.Await("ZAdd", key, 20.0, "m_b")
+        redis.Await("ZAdd", key, 30.0, "m_c")
+        redis.Await("ZAdd", key, 40.0, "m_d")
+
+        local e1, r1 = redis.Await("ZRevRank", key, "m_a")
+        if e1 ~= "" or r1 ~= 3 then
+            redis_state.msg  = "coro ZRevRank m_a: got " .. tostring(r1)
+            redis_state.done = true
+            return
+        end
+
+        local e2, c2 = redis.Await("ZCount", key, 10.0, 30.0)
+        if e2 ~= "" or c2 ~= 3 then
+            redis_state.msg  = "coro ZCount 10-30: got " .. tostring(c2)
+            redis_state.done = true
+            return
+        end
+
+        local e3, s3 = redis.Await("ZIncrBy", key, "m_a", 5.0)
+        if e3 ~= "" or math.abs(s3 - 15.0) >= 0.001 then
+            redis_state.msg  = "coro ZIncrBy m_a+5: got " .. tostring(s3)
+            redis_state.done = true
+            return
+        end
+
+        local e4, m4 = redis.Await("ZRange", key, 0, -1, false)
+        if e4 ~= "" or #m4 ~= 4 then
+            redis_state.msg  = "coro ZRange 0 -1: got " .. tostring(#(m4 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e5, m5 = redis.Await("ZRange", key, 0, -1, true)
+        if e5 ~= "" or #m5 ~= 8 then
+            redis_state.msg  = "coro ZRange with_scores: got " .. tostring(#(m5 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e6, m6 = redis.Await("ZRevRange", key, 0, -1, false)
+        if e6 ~= "" or #m6 ~= 4 then
+            redis_state.msg  = "coro ZRevRange: got " .. tostring(#(m6 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e7, m7 = redis.Await("ZRangeByScore", key, 10.0, 30.0, false)
+        if e7 ~= "" or #m7 ~= 3 then
+            redis_state.msg  = "coro ZRangeByScore: got " .. tostring(#(m7 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e8, m8 = redis.Await("ZRevRangeByScore", key, 30.0, 10.0, false)
+        if e8 ~= "" or #m8 ~= 3 then
+            redis_state.msg  = "coro ZRevRangeByScore: got " .. tostring(#(m8 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e9, p9 = redis.Await("ZRangeWithScores", key, 0, -1)
+        if e9 ~= "" or #p9 ~= 4 or p9[1].member == nil or p9[1].score == nil then
+            redis_state.msg  = "coro ZRangeWithScores: got " .. tostring(#(p9 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e10, p10 = redis.Await("ZRevRangeWithScores", key, 0, -1)
+        if e10 ~= "" or #p10 ~= 4 or p10[1].member == nil then
+            redis_state.msg  = "coro ZRevRangeWithScores: got " .. tostring(#(p10 or {}))
+            redis_state.done = true
+            return
+        end
+
+        local e11, r11 = redis.Await("ZRemRangeByRank", key, 0, 1)
+        if e11 ~= "" or r11 ~= 2 then
+            redis_state.msg  = "coro ZRemRangeByRank: got " .. tostring(r11)
+            redis_state.done = true
+            return
+        end
+
+        local e12, r12 = redis.Await("ZRemRangeByScore", key, 10.0, 100.0)
+        redis_state.done = true
+        if e12 ~= "" then
+            redis_state.msg = "coro ZRemRangeByScore error: " .. e12
+        elseif r12 < 1 then
+            redis_state.msg = "coro ZRemRangeByScore: got " .. tostring(r12)
         else
             redis_state.ok  = true
             redis_state.msg = "ok"

@@ -207,6 +207,113 @@ local function run_redis_tests()
                                    tostring(arr and arr[1]), tostring(arr and arr[2])))
         end)
 
+    -- ── Advanced Sorted Set (callback) tests ──
+    -- Test newly added ZSet APIs: ZRevRank, ZCount, ZIncrBy, ZRange/RevRange (with_scores),
+    -- ZRangeByScore/RevRangeByScore, ZRangeWithScores/RevRangeWithScores,
+    -- ZRemRangeByRank/Score.
+    redis.AsyncDel("lua:zset_adv", function()
+        redis.AsyncZAdd("lua:zset_adv", 10.0, "m_a", function(_, n1)
+            log_test("AsyncZAdd adv #1", n1 == 1, n1)
+            redis.AsyncZAdd("lua:zset_adv", 20.0, "m_b", function(_, n2)
+                redis.AsyncZAdd("lua:zset_adv", 30.0, "m_c", function(_, n3)
+                    redis.AsyncZAdd("lua:zset_adv", 40.0, "m_d", function(_, n4)
+                        log_test("AsyncZAdd adv #4 members", n4 == 1,
+                                 string.format("err=%s n=%d", "", n4 or 0))
+
+                        -- ZRevRank: highest score (m_d=40) → rank 0, lowest (m_a=10) → rank 3
+                        redis.AsyncZRevRank("lua:zset_adv", "m_a", function(e1, r1)
+                            log_test("AsyncZRevRank (m_a=3)", e1 == "" and r1 == 3,
+                                     string.format("err=%s rank=%d", e1, r1 or -1))
+                            redis.AsyncZRevRank("lua:zset_adv", "m_d", function(e1b, r1b)
+                                log_test("AsyncZRevRank (m_d=0)", e1b == "" and r1b == 0,
+                                         string.format("err=%s rank=%d", e1b, r1b or -1))
+
+                                -- ZCount: members with 10 ≤ score ≤ 30 → m_a,m_b,m_c
+                                redis.AsyncZCount("lua:zset_adv", 10.0, 30.0, function(e2, c2)
+                                    log_test("AsyncZCount 10-30", e2 == "" and c2 == 3,
+                                             string.format("err=%s cnt=%d", e2, c2 or 0))
+
+                                    -- ZIncrBy: m_a +5.0 → score 15.0
+                                    redis.AsyncZIncrBy("lua:zset_adv", "m_a", 5.0, function(e3, s3)
+                                        log_test("AsyncZIncrBy m_a+5",
+                                                 e3 == "" and math.abs(s3 - 15.0) < 0.001,
+                                                 string.format("err=%s score=%.1f", e3, s3 or -1))
+
+                                        -- ZRange 0 -1 (no scores) → 4 members
+                                        redis.AsyncZRange("lua:zset_adv", 0, -1, false, function(e4, m4)
+                                            log_test("AsyncZRange 0 -1 (no scores)",
+                                                     e4 == "" and #m4 == 4,
+                                                     string.format("err=%s n=%d", e4, #(m4 or {})))
+
+                                            -- ZRange 0 -1 (with scores) → 8 elements (m,s,m,s,...)
+                                            redis.AsyncZRange("lua:zset_adv", 0, -1, true, function(e5, m5)
+                                                log_test("AsyncZRange 0 -1 (with scores)",
+                                                         e5 == "" and #m5 == 8,
+                                                         string.format("err=%s n=%d", e5, #(m5 or {})))
+
+                                                -- ZRevRange 0 -1 → reversed, 4 members
+                                                redis.AsyncZRevRange("lua:zset_adv", 0, -1, false, function(e6, m6)
+                                                    log_test("AsyncZRevRange 0 -1 (no scores)",
+                                                             e6 == "" and #m6 == 4,
+                                                             string.format("err=%s n=%d", e6, #(m6 or {})))
+
+                                                    -- ZRangeByScore 10-30 → m_a(15), m_b(20), m_c(30)
+                                                    redis.AsyncZRangeByScore("lua:zset_adv", 10.0, 30.0, false, function(e7, m7)
+                                                        log_test("AsyncZRangeByScore 10-30",
+                                                                 e7 == "" and #m7 == 3,
+                                                                 string.format("err=%s n=%d", e7, #(m7 or {})))
+
+                                                        -- ZRevRangeByScore 30-10 → reversed order
+                                                        redis.AsyncZRevRangeByScore("lua:zset_adv", 30.0, 10.0, false, function(e8, m8)
+                                                            log_test("AsyncZRevRangeByScore 30-10",
+                                                                     e8 == "" and #m8 == 3,
+                                                                     string.format("err=%s n=%d", e8, #(m8 or {})))
+
+                                                            -- ZRangeWithScores: table of {member, score}
+                                                            redis.AsyncZRangeWithScores("lua:zset_adv", 0, -1, function(e9, p9)
+                                                                log_test("AsyncZRangeWithScores",
+                                                                         e9 == "" and #p9 == 4
+                                                                             and p9[1].member ~= nil and p9[1].score ~= nil,
+                                                                         string.format("err=%s n=%d", e9, #(p9 or {})))
+
+                                                                -- ZRevRangeWithScores
+                                                                redis.AsyncZRevRangeWithScores("lua:zset_adv", 0, -1, function(e10, p10)
+                                                                    log_test("AsyncZRevRangeWithScores",
+                                                                             e10 == "" and #p10 == 4
+                                                                                 and p10[1].member ~= nil,
+                                                                             string.format("err=%s n=%d", e10, #(p10 or {})))
+
+                                                                    -- ZRemRangeByRank 0-1: remove 2 lowest
+                                                                    redis.AsyncZRemRangeByRank("lua:zset_adv", 0, 1, function(e11, r11)
+                                                                        log_test("AsyncZRemRangeByRank 0-1",
+                                                                                 e11 == "" and r11 == 2,
+                                                                                 string.format("err=%s n=%d", e11, r11 or 0))
+
+                                                                        -- ZRemRangeByScore: remove rest
+                                                                        redis.AsyncZRemRangeByScore("lua:zset_adv", 10.0, 100.0, function(e12, r12)
+                                                                            log_test("AsyncZRemRangeByScore",
+                                                                                     e12 == "" and r12 >= 1,
+                                                                                     string.format("err=%s n=%d", e12, r12 or 0))
+                                                                            redis.AsyncDel("lua:zset_adv", function() end)
+                                                                        end)
+                                                                    end)
+                                                                end)
+                                                            end)
+                                                        end)
+                                                    end)
+                                                end)
+                                            end)
+                                        end)
+                                    end)
+                                end)
+                            end)
+                        end)
+                    end)
+                end)
+            end)
+        end)
+    end)
+
     -- ═════════════════════════════════════════════════════════════════════
     -- Redis Lua Coroutine (Await) Tests
     -- ═════════════════════════════════════════════════════════════════════
@@ -275,6 +382,66 @@ local function run_redis_tests()
         log_test("Await Incr", e15 == "" and n15 == 1,
                  string.format("err=%s val=%d", e15, n15 or -1))
         redis.AsyncDel("lua:aw_incr", function() end)
+
+        -- ── Await Advanced Sorted Set ──
+        local zadv = "lua:aw_zadv"
+        redis.Await("Del", zadv)
+        redis.Await("ZAdd", zadv, 10.0, "m_a")
+        redis.Await("ZAdd", zadv, 20.0, "m_b")
+        redis.Await("ZAdd", zadv, 30.0, "m_c")
+        redis.Await("ZAdd", zadv, 40.0, "m_d")
+
+        local e16, rr16 = redis.Await("ZRevRank", zadv, "m_a")
+        log_test("Await ZRevRank (m_a=3)", e16 == "" and rr16 == 3,
+                 string.format("err=%s rank=%d", e16, rr16 or -1))
+
+        local e17, cnt17 = redis.Await("ZCount", zadv, 10.0, 30.0)
+        log_test("Await ZCount 10-30", e17 == "" and cnt17 == 3,
+                 string.format("err=%s cnt=%d", e17, cnt17 or 0))
+
+        local e18, sc18 = redis.Await("ZIncrBy", zadv, "m_a", 5.0)
+        log_test("Await ZIncrBy m_a+5", e18 == "" and math.abs(sc18 - 15.0) < 0.001,
+                 string.format("err=%s score=%.1f", e18, sc18 or -1))
+
+        local e19, m19 = redis.Await("ZRange", zadv, 0, -1, false)
+        log_test("Await ZRange 0 -1 (no scores)", e19 == "" and #m19 == 4,
+                 string.format("err=%s n=%d", e19, #(m19 or {})))
+
+        local e20, m20 = redis.Await("ZRange", zadv, 0, -1, true)
+        log_test("Await ZRange 0 -1 (with scores)", e20 == "" and #m20 == 8,
+                 string.format("err=%s n=%d", e20, #(m20 or {})))
+
+        local e21, m21 = redis.Await("ZRevRange", zadv, 0, -1, false)
+        log_test("Await ZRevRange 0 -1", e21 == "" and #m21 == 4,
+                 string.format("err=%s n=%d", e21, #(m21 or {})))
+
+        local e22, m22 = redis.Await("ZRangeByScore", zadv, 10.0, 30.0, false)
+        log_test("Await ZRangeByScore 10-30", e22 == "" and #m22 == 3,
+                 string.format("err=%s n=%d", e22, #(m22 or {})))
+
+        local e23, m23 = redis.Await("ZRevRangeByScore", zadv, 30.0, 10.0, false)
+        log_test("Await ZRevRangeByScore 30-10", e23 == "" and #m23 == 3,
+                 string.format("err=%s n=%d", e23, #(m23 or {})))
+
+        local e24, p24 = redis.Await("ZRangeWithScores", zadv, 0, -1)
+        log_test("Await ZRangeWithScores",
+                 e24 == "" and #p24 == 4 and p24[1].member ~= nil and p24[1].score ~= nil,
+                 string.format("err=%s n=%d", e24, #(p24 or {})))
+
+        local e25, p25 = redis.Await("ZRevRangeWithScores", zadv, 0, -1)
+        log_test("Await ZRevRangeWithScores",
+                 e25 == "" and #p25 == 4 and p25[1].member ~= nil,
+                 string.format("err=%s n=%d", e25, #(p25 or {})))
+
+        local e26, r26 = redis.Await("ZRemRangeByRank", zadv, 0, 1)
+        log_test("Await ZRemRangeByRank 0-1", e26 == "" and r26 == 2,
+                 string.format("err=%s n=%d", e26, r26 or 0))
+
+        local e27, r27 = redis.Await("ZRemRangeByScore", zadv, 10.0, 100.0)
+        log_test("Await ZRemRangeByScore", e27 == "" and r27 >= 1,
+                 string.format("err=%s n=%d", e27, r27 or 0))
+
+        redis.Await("Del", zadv)
 
         log.Info("[Redis Lua tests completed]")
     end)
