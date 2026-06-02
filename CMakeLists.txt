@@ -40,7 +40,6 @@ add_compile_definitions(
     BOOST_ASIO_HAS_STD_THREAD
     BOOST_CHARCONV_DISABLE_FLOAT128
     BOOST_BIND_GLOBAL_PLACEHOLDERS
-    _CPPUNWIND  # 显式启用异常处理，防止 Boost 定义 BOOST_NO_EXCEPTIONS
 )
 
 # 设置静态库和动态库的输出目录
