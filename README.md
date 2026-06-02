@@ -883,6 +883,261 @@ LOG_CRITI("Fatal error: {}", msg);
 
 ---
 
+# 模块十：Redis Lua 接口
+
+基于 **Boost.Redis**（连接池 + RESP3 协议），支持异步回调与 Lua 协程两种调用风格。通过 `redis.Connect()` 初始化连接池。
+
+## 连接管理
+
+```lua
+-- 初始化 Redis 连接池（在 main.lua 中调用一次）
+redis.Connect({
+    host      = "127.0.0.1",
+    port      = 6379,
+    password  = "",
+    db        = 0,
+    pool_size = 4,
+    timeout   = 5000,       -- 毫秒
+})
+
+-- 检查连接池健康
+local ok = redis.IsHealthy()   -- → boolean
+```
+
+## 异步回调 API
+
+所有异步方法通过 `callback(err, value)` 返回值。`err` 为空字符串表示成功，非空为错误描述。
+
+### String 操作
+
+```lua
+redis.AsyncSet("key", "value", function(err) end)
+redis.AsyncSetEx("key", "value", 60, function(err) end)     -- 60s 过期
+redis.AsyncGet("key", function(err, val) end)               -- val=nil 表示 key 不存在
+redis.AsyncDel("key", function(err, n) end)                 -- n=删除数量
+redis.AsyncExists("key", function(err, n) end)
+redis.AsyncIncr("key", function(err, n) end)                -- 自增 1
+redis.AsyncIncrBy("key", 10, function(err, n) end)          -- 自增 10
+redis.AsyncExpire("key", 60, function(err) end)
+redis.AsyncTTL("key", function(err, ttl) end)
+```
+
+### Hash 操作
+
+```lua
+redis.AsyncHSet("hash", "field", "value", function(err) end)
+redis.AsyncHGet("hash", "field", function(err, val) end)
+redis.AsyncHDel("hash", "field", function(err) end)
+redis.AsyncHKeys("hash", function(err, keys) end)           -- keys: table array
+redis.AsyncHVals("hash", function(err, vals) end)           -- vals: table array
+redis.AsyncHLen("hash", function(err, n) end)
+```
+
+### List 操作
+
+```lua
+redis.AsyncLPush("list", "value", function(err, n) end)
+redis.AsyncRPush("list", "value", function(err, n) end)
+redis.AsyncLPop("list", function(err, val) end)
+redis.AsyncRPop("list", function(err, val) end)
+redis.AsyncLLen("list", function(err, n) end)
+```
+
+### Sorted Set 操作
+
+```lua
+redis.AsyncZAdd("zset", 1.0, "member", function(err) end)
+redis.AsyncZRange("zset", 0, -1, function(err, members) end)
+redis.AsyncZRevRange("zset", 0, -1, function(err, members) end)
+redis.AsyncZCard("zset", function(err, n) end)
+redis.AsyncZRem("zset", "member", function(err) end)
+redis.AsyncZScore("zset", "member", function(err, score) end)
+redis.AsyncZRank("zset", "member", function(err, rank) end)
+```
+
+### 通用命令
+
+```lua
+-- 发送任意 Redis 命令（RESP3 自动解析返回值）
+redis.AsyncCall("CLUSTER", "INFO", function(err, val) end)
+
+-- 执行 Lua 脚本
+redis.AsyncEval("return redis.call('GET', KEYS[1])", 1, "mykey",
+    function(err, val) end)
+
+-- Ping
+redis.AsyncPing(function(err) end)
+```
+
+## 协程桥接 — redis.Await
+
+允许在 Lua 协程中以**同步风格**写异步代码：
+
+```lua
+local co = coroutine.create(function()
+    local err, val = redis.Await("Get", "mykey")
+    if err ~= "" then
+        log.Error("redis error: " .. err)
+        return
+    end
+    log.Info("got: " .. tostring(val))
+end)
+coroutine.resume(co)
+```
+
+`redis.Await(method, ...)` 调用对应的 `redis.Async<method>`，自动处理回调与协程的 yield/resume 桥接。
+
+**原理：** `sol::function` 在协程上下文创建时引用协程的 `lua_State`。若直接在协程栈上执行回调，会与 `coroutine.yield/resume` 产生冲突。Lua 回调桥接通过 `lua_xmove` 将函数引用迁移到主线程的 `lua_State` 上执行（详见 `register_redis.cpp` 的 `LuaCbBridge::Create`）。
+
+---
+
+# 模块十一：PostgreSQL Lua 接口
+
+基于 **libpq** 异步接口 + Boost.Asio reactor 模式。通过专用 PG IO 线程处理所有异步操作，回调通过 `Worker::Post` 回到发起调用的 Worker 线程。
+
+## 架构
+
+```
+Worker Thread                    PG IO Thread             PostgreSQL
+     │                               │                       │
+     ├─ pg.AsyncQuery(sql, cb) ──────┤                       │
+     │                               ├─ PQsendQuery() ───────┤
+     │                               │       ··· async ···   │
+     │                               ├─ PQgetResult() ←──────┤
+     │  w->Post([cb] { cb(res) }) ←──┤                       │
+     ▼                               ▼                       ▼
+  Worker 帧循环                   io_context::run()        libpq
+```
+
+- 全局唯一 PG IO 线程（`g_pg_io_ctx.run()`）
+- 全局连接通过 `pg.AsyncConnect` 建立，后续所有调用共享该连接
+- 回调始终回到**发起调用的 Worker 线程**（通过 `Worker::Post`）
+
+## 连接管理
+
+```lua
+-- 异步连接 PostgreSQL
+pg.AsyncConnect({
+    host            = "127.0.0.1",
+    port            = 5432,
+    database        = "test",
+    user            = "postgres",
+    password        = "",
+    use_ssl         = false,
+    connect_timeout = 10,         -- 秒
+}, function(err, ok)
+    if ok then
+        log.Info("PG connected!")
+    end
+end)
+
+-- 同步检查连接状态
+local connected = pg.IsConnected()   -- → boolean
+```
+
+## 异步回调 API
+
+所有异步方法通过 `callback(err, ...)` 返回值。`err` 为空字符串表示成功，非空为错误描述。
+
+### 查询与执行
+
+```lua
+-- 简单查询，无参数
+pg.AsyncQuery("SELECT * FROM users", function(err, rows)
+    if err ~= "" then log.Error(err); return end
+    for _, row in ipairs(rows) do
+        log.Info(row.name)
+    end
+end)
+
+-- 参数化查询（$1, $2, ...）
+pg.AsyncQuery("SELECT * FROM users WHERE id = $1", 42, function(err, rows)
+    -- rows 为 table array，每个元素是 field_name → value 的 table
+end)
+
+-- DML 执行
+pg.AsyncExecute("DELETE FROM users WHERE id = $1", 42, function(err, n)
+    log.Info("deleted " .. n .. " rows")
+end)
+
+-- 无参数 DML
+pg.AsyncExecute("TRUNCATE test_table", function(err, n)
+    log.Info("truncated, affected: " .. n)
+end)
+```
+
+**查询结果格式：**
+
+```lua
+-- rows 是一个 Lua table array（从 1 开始索引），每个元素格式：
+-- {
+--   { id = 1, name = "Alice", score = 95.5 },
+--   { id = 2, name = "Bob",   score = 87.0 },
+-- }
+```
+
+字段值类型自动转换：
+
+| PostgreSQL 类型 | Lua 类型 |
+|---|---|
+| BOOL | `boolean` |
+| INT2/INT4/INT8 | `number` |
+| FLOAT4/FLOAT8 | `number` |
+| NUMERIC/DATE/TIME/TIMESTAMP | `string` |
+| TEXT/VARCHAR/UUID/JSON/INET | `string` |
+| NULL | `nil` |
+
+### 事务
+
+```lua
+pg.AsyncBegin(function(err, ok)
+    if not ok then return end
+    pg.AsyncExecute("INSERT INTO test VALUES ($1, $2)", 1, "hello", function(err, n)
+        if err ~= "" then
+            pg.AsyncRollback(function(err, ok)
+                log.Info("rolled back")
+            end)
+        else
+            pg.AsyncCommit(function(err, ok)
+                log.Info("committed")
+            end)
+        end
+    end)
+end)
+```
+
+## 协程桥接 — pg.Await
+
+允许在 Lua 协程中以**同步风格**写异步数据库代码：
+
+```lua
+local co = coroutine.create(function()
+    -- 查询
+    local err, rows = pg.Await("Query", "SELECT * FROM users WHERE id = $1", 42)
+    if err ~= "" then log.Error(err); return end
+    for _, row in ipairs(rows) do
+        log.Info(row.name)
+    end
+
+    -- 插入
+    local err, n = pg.Await("Execute", "INSERT INTO test VALUES ($1, $2)", 1, "hello")
+
+    -- 事务
+    local err, ok = pg.Await("Begin")
+    if ok then
+        pg.Await("Execute", "UPDATE users SET score = $1 WHERE id = $2", 100, 1)
+        pg.Await("Commit")
+    end
+end)
+coroutine.resume(co)
+```
+
+`pg.Await(method, ...)` 调用对应的 `pg.Async<method>`，自动处理回调与协程的 yield/resume 桥接。
+
+**协程桥接模式：** `BridgeCallback` 辅助函数通过 `lua_xmove` 将 `sol::function` 引用从协程的 `lua_State` 迁移到 Worker 主线程的 `lua_State`，确保回调在主线程栈上执行，避免与 `coroutine.yield/resume` 冲突（详见 `register_postgresql.cpp` 的 `BridgeCallback`）。
+
+---
+
 # 目录结构
 
 ```
@@ -901,7 +1156,9 @@ src/
     http/                — HttpServer, HttpClient, HttpSession/HttpsSession
     msgpack/             — 自定义 msgpack packer/unpacker
   script/                — Script(sol::state), protobuf↔Lua 桥接
-  db/                    — MySQL / Redis 示例
+  db/
+    redis/               — Redis 连接池 + Lua 绑定（Boost.Redis）
+    postgres/            — PostgreSQL 连接 + Lua 绑定（libpq）
 
 server/                  — 正式服务器进程
   login_server/          — LoginApp (ServerApp + HttpServer)
@@ -918,6 +1175,8 @@ res/                     — 资源文件
 script/                  — Lua 脚本（顶层）
   main.lua               — 入口脚本
   test.lua               — RPC 测试
+  test_db.lua            — 数据库测试启动入口
+  db_test_lua_redis_pg.lua— Redis + PostgreSQL 测试
   LuaPanda.lua           — LuaPanda 调试器
 protobuf/                — 生成的 .pb.h/.pb.cc
 cmake/                   — 构建工具函数
