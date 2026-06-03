@@ -1,6 +1,6 @@
 #pragma once
 #include "gbnet/buffer/buffer.h"
-#include "network/msgpack/msgpack.hpp"
+#include "msgpack/msgpack.hpp"
 #include "google/protobuf/message.h"
 namespace gb
 {

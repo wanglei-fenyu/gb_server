@@ -1,6 +1,6 @@
 #include "script.h"
 #include "register_script.h"
-#include "../network/msgpack/msgpack.hpp"
+#include "msgpack/msgpack.hpp"
 #include "network/io/session.h"
 #include "network/manager/network_manager.h"
 #include "log/log.h"

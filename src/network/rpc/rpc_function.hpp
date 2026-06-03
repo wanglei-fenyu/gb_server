@@ -7,7 +7,7 @@
 #include "script/script.h"
 #include "network/io/message_meta.h"
 #include "rpc_reply.h"
-#include "network/msgpack/msgpack.hpp"
+#include "msgpack/msgpack.hpp"
 #include <gbnet/buffer/compressed_stream.h>
 #include "rpc_function_help.h"
 

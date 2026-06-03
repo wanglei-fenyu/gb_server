@@ -1,6 +1,6 @@
 ﻿#pragma once 
 #include <sol/sol.hpp>
-#include "network/msgpack/msgpack.hpp"
+#include "msgpack/msgpack.hpp"
 #include "network/io/session.h"
 
 namespace gb
