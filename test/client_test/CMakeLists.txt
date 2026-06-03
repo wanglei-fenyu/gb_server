@@ -37,12 +37,6 @@ collectHeadFiles(MY_INC_MAIN ALL_MY_FILE_MAIN)
 collectSrcFiles(MY_INC_SRC_MAIN ALL_MY_FILE_MAIN)
 collectAllSrcFiles(MY_INC_SRC_MAIN ALL_MY_FILE_MAIN)
 
-if(NOT LINUX)
-    #windown下分组
-    source_group(${TARGET_NAME} TREE ${CMAKE_CURRENT_LIST_DIR} FILES ${MY_INC_SRC_MAIN})
-    source_group(${TARGET_NAME} TREE ${COMMON_CPP_DIR} FILES ${ALL_INC_SRC})
-    source_group("protobuf" TREE ${CMAKE_SOURCE_DIR} FILES ${PROT_INC_SRC})
-endif()
 
 target_sources(${TARGET_NAME} PRIVATE
     ${ALL_INC_SRC}
