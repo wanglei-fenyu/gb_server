@@ -1,5 +1,6 @@
 ﻿#pragma once
 #include "message_type.h"
+#include "service_worker_type.h"
 #include "worker/worker.h"
 #include <array>
 #include <functional>
@@ -11,13 +12,6 @@ namespace gb
 	enum MessageIntervalRange
 	{
 		MIR_Range = 10000
-	};
-	enum ServiceWorkerType : uint8_t
-	{
-		SWT_Normal	= 0,
-		SWT_AI		= 1,
-		SWT_Navigation = 2,
-		SWT_Count
 	};
 
 
@@ -60,8 +54,9 @@ namespace gb
             }
             if (resolver)
                 return resolver(message_type);
-			int service_worker_type = message_type % MIR_Range;
-			return (ServiceWorkerType)service_worker_type;
+			// 不再有默认的 % 10000 映射 —— 所有未显式设置 resolver 的消息统一走 Normal Worker。
+			// 需要 AI/Navigation 路由的服务必须通过 SetServiceTypeResolver 设置显式映射。
+			return SWT_Normal;
 		}
 	
 

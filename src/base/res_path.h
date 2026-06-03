@@ -1,5 +1,6 @@
 #pragma once
 #include "singleton.h"
+#include <string>
 class ResPath : public Singleton<ResPath>
 {
 public:

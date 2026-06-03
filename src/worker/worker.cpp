@@ -8,12 +8,6 @@
 namespace gb
 {
 
-namespace
-{
-/// 线程本地的待处理RPC调用——仅由所属Worker线程访问。
-/// 每个Worker在此存储自己的传出RPC调用，因此不需要锁。
-thread_local std::unordered_map<uint32_t, RpcCallPtr> tls_pending_rpcs;
-} // anonymous namespace
 Worker::Worker(WorkerType type)
 	: worker_type_(type)
 {
@@ -214,16 +208,16 @@ uint32_t Worker::AllocRpcSeq()
 
 void Worker::StorePendingRpc(uint32_t local_seq, RpcCallPtr call)
 {
-    tls_pending_rpcs[local_seq] = std::move(call);
+    pending_rpcs_[local_seq] = std::move(call);
 }
 
 RpcCallPtr Worker::TakePendingRpc(uint32_t local_seq)
 {
-    auto it = tls_pending_rpcs.find(local_seq);
-    if (it == tls_pending_rpcs.end())
+    auto it = pending_rpcs_.find(local_seq);
+    if (it == pending_rpcs_.end())
         return nullptr;
     auto call = std::move(it->second);
-    tls_pending_rpcs.erase(it);
+    pending_rpcs_.erase(it);
     return call;
 }
 

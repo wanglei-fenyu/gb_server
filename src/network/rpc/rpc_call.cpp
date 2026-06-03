@@ -75,8 +75,9 @@ void RpcCall::Cancel()
     if (!state_.compare_exchange_strong(expected, RpcState::Cancelled, std::memory_order_acq_rel, std::memory_order_acquire))
         return;
 
-    // 从线程本地挂起映射中移除（Cancel必须在所属Worker线程中调用）
-    Worker::TakePendingRpc(local_seq_);
+    // 从所属Worker的挂起映射中移除（Cancel必须在所属Worker线程中调用）
+    auto _worker = WorkerManager::Instance()->GetWorker(worker_index_);
+    if (_worker) _worker->TakePendingRpc(local_seq_);
 
     std::function<void()> cancel_callback;
     {
@@ -149,8 +150,9 @@ void RpcCall::StartTimer()
         RpcState expected = RpcState::Pending;
         if (!state_.compare_exchange_strong(expected, RpcState::InvalidRequest, std::memory_order_acq_rel, std::memory_order_acquire))
             return;
-        // 清理：从所属Worker的线程本地映射中移除并调用取消回调
-        Worker::TakePendingRpc(local_seq_);
+        // 清理：从所属Worker的挂起映射中移除并调用取消回调
+        auto _w = WorkerManager::Instance()->GetWorker(worker_index_);
+        if (_w) _w->TakePendingRpc(local_seq_);
         std::function<void()> cancel_callback;
         {
             std::lock_guard<std::mutex> lock(callback_mutex_);
@@ -176,9 +178,9 @@ void RpcCall::StartTimer()
         if (!worker)
             return;
 
-        worker->Post([self]() {
-            // 从线程本地映射中移除（在所属Worker线程上安全执行）
-            Worker::TakePendingRpc(self->local_seq_);
+        worker->Post([self, worker]() {
+            // 从所属Worker的挂起映射中移除（在所属Worker线程上安全执行）
+            worker->TakePendingRpc(self->local_seq_);
 
             std::function<void()> timeout_callback;
             {

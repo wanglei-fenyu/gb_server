@@ -75,4 +75,37 @@ namespace gb
             return WorkerExecutor::Worker(target);
         return *executor;
 	}
+
+    // ── 实体路由 ──────────────────────────────────────────────────
+
+    WorkerExecutor Router::GetEntityExecutor(uint64_t entity_id) const
+    {
+        uint32_t worker_index = entity_route_table_.Lookup(entity_id);
+        if (worker_index == LockFreeRouteTable::kInvalidWorker)
+            return {};  // 无效 executor（HasWorker() == false）
+
+        auto worker = WorkerManager::Instance()->GetWorker(worker_index);
+        if (!worker)
+            return {};
+
+        auto executor = worker->GetExecutor();
+        if (executor)
+            return *executor;
+        return WorkerExecutor::Worker(worker);
+    }
+
+    void Router::BindEntity(uint64_t entity_begin, uint64_t entity_end, uint32_t worker_index)
+    {
+        entity_route_table_.Bind(entity_begin, entity_end, worker_index);
+    }
+
+    void Router::UnbindEntity(uint64_t entity_id)
+    {
+        entity_route_table_.Unbind(entity_id);
+    }
+
+    void Router::FreezeEntityRoutes()
+    {
+        entity_route_table_.Freeze();
+    }
 }

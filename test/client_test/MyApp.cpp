@@ -58,7 +58,7 @@ int MyApp::OnInit()
     //gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
     gb::WorkerManager* work_mng = gb::WorkerManager::Instance();
     
-    auto narmal_worker = work_mng->CreateWorker(std::make_shared<NormalWorkerLogic>());
+    auto narmal_worker = work_mng->CreateWorker(std::make_shared<NormalWorkerLogic>(), gb::SWT_Normal);
     gb::NetworkManager::Instance()->GetRouter().RegisterWorker(gb::SWT_Normal, narmal_worker);
 
     gb::ClientOptions options;

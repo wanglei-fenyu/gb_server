@@ -35,7 +35,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         
         // 成员变量可读写
         "mode",          &gb::Meta::mode,
-        "id",            &gb::Meta::id,
+        "entity_id",            &gb::Meta::entity_id,
         "type",          &gb::Meta::type,
         "method",        &gb::Meta::method,
         "sequence",      &gb::Meta::sequence,
@@ -44,7 +44,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         // 成员函数（通过自定义函数实现）
         sol::meta_function::to_string, [](const gb::Meta& self) {
             return "Meta{mode=" + std::to_string(static_cast<int>(self.mode)) 
-                 + ", id=" + std::to_string(self.id)
+                 + ", entity_id=" + std::to_string(self.entity_id)
                  + ", type=" + std::to_string(self.type)
                  + ", method=" + std::to_string(self.method)
                  + ", sequence=" + std::to_string(self.sequence)
@@ -55,7 +55,7 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         // 比较操作符（可选）
         sol::meta_function::equal_to, [](const gb::Meta& lhs, const gb::Meta& rhs) {
             return lhs.mode == rhs.mode 
-                && lhs.id == rhs.id
+                && lhs.entity_id == rhs.entity_id
                 && lhs.type == rhs.type
                 && lhs.method == rhs.method
                 && lhs.sequence == rhs.sequence

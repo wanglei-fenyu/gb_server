@@ -50,7 +50,8 @@ int ServerApp::OnInit()
 {
     // --- worker — 创建工作线程 ---
     auto* work_mng = gb::WorkerManager::Instance();
-    auto  worker   = work_mng->CreateWorker(std::make_shared<DefaultWorkerLogic>());
+    auto  worker   = work_mng->CreateWorker(std::make_shared<DefaultWorkerLogic>(), gb::SWT_Normal);
+    // 注册到 Router（Worker 自身已携带 service_type，此处保持显式注册便于后续扩展）
     gb::NetworkManager::Instance()->GetRouter().RegisterWorker(gb::SWT_Normal, worker);
 
     // --- network — 启动网络 ---

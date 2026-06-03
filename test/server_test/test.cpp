@@ -9,7 +9,7 @@ void hello(const std::shared_ptr<gb::Session>& session)
 void World(const std::shared_ptr<gb::Session>& session,TestMsg& msg)
 {
 	gb::Meta meta;
-	meta.id = 2;
+	meta.entity_id = 2;
 	meta.type = 11;
 	session->Send(&meta,&msg);
     LOG_INFO("wrold {}", msg.msg());

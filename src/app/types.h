@@ -1,5 +1,7 @@
 #pragma once
 #include <map>
+#include <string>
+#include <utility>
 #include "base/singleton.h"
 
 enum APP_TYPE

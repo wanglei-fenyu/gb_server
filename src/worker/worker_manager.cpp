@@ -41,10 +41,11 @@ WorkerPtr WorkerManager::GetMainWorker() const
     return main_worker_;
 }
 
- WorkerPtr WorkerManager::CreateWorker(std::shared_ptr<IWorkerLogic> worker_logic)
-{
+ WorkerPtr WorkerManager::CreateWorker(std::shared_ptr<IWorkerLogic> worker_logic, ServiceWorkerType service_type)
+ {
 	 WorkerPtr       work      = std::make_shared<Worker>(Worker::WorkerType::NORMAL);
 	 work->SetWorkerLogic(worker_logic);
+     work->SetServiceType(service_type);
      size_t index = 1;
      {
          std::lock_guard<std::mutex> lock(mutex_);

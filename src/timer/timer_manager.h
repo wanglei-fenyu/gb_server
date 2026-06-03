@@ -1,3 +1,4 @@
+#pragma once
 #include "timer.h"
 #include <queue>
 #include <unordered_map>

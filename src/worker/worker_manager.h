@@ -13,7 +13,11 @@ namespace gb
 		~WorkerManager();
         void InitMainWorker();
         WorkerPtr GetMainWorker() const;
-        WorkerPtr CreateWorker(std::shared_ptr<IWorkerLogic> worker_logic);
+        /// 创建 Normal Worker。
+        /// @param worker_logic  工作逻辑
+        /// @param service_type  业务类型（SWT_Normal / SWT_AI / SWT_Navigation 等）
+        WorkerPtr CreateWorker(std::shared_ptr<IWorkerLogic> worker_logic,
+                               ServiceWorkerType service_type = SWT_Normal);
 
         size_t Size() const;
         WorkerPtr GetWorker(size_t index) const;

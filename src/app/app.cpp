@@ -4,6 +4,8 @@
 #include "async/shutdown.h"
 #include "network/io/io_service_pool.h"
 #include "network/manager/network_manager.h"
+#include "timer/timer_manager.h"
+#include "async/thread_pool_scheduler.h"
 #include <thread>
 #include "base/res_path.h"
 #include "db/redis/register_redis.h"
@@ -35,6 +37,9 @@ int App::Init()
     gb::WorkerManager::Instance()->InitMainWorker();
     
     // 初始化关闭管理器
+    // 主线程系统定时器
+    sys_timer_mgr_ = std::make_unique<gb::TimerManager>();
+
     shutdown_manager_ = std::make_shared<gb::ShutdownManager>();
     shutdown_manager_->Initialize(
         [this](gb::ShutdownManager::ShutdownPhase phase) { OnPhaseStoppingIO(phase); },
@@ -50,6 +55,9 @@ int App::Init()
             shutdown_manager_->Shutdown();
     }))
         return -1;
+    // 初始化抢占式线程池调度器（Worker 可通过 Dispatch / Schedule 使用）
+    gb::ThreadPoolScheduler::Instance()->Init();
+
     if (OnInit() != 0) return -1;
     runding_ = true;
     return 0;
@@ -79,7 +87,13 @@ void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
 {
     LOG_INFO("=== Phase 3: Processing pending tasks ===");
     
-    // 所有 Worker 进入关闭模式
+    // ── 0. 先 Drain ThreadPool —— 确保所有重度任务完成，回调已投递到 Worker 队列 ──
+    //     顺序很重要：ThreadPool 先于 Worker，否则 Worker 收不到 ThreadPool 的回调。
+    LOG_INFO("Draining ThreadPool (pending: {})", gb::ThreadPoolScheduler::Instance()->PendingCount());
+    gb::ThreadPoolScheduler::Instance()->Stop();
+    LOG_INFO("ThreadPool drained");
+
+    // 所有 Normal Worker 进入关闭模式
     auto workers = gb::WorkerManager::Instance()->GetWorkers();
     for (auto& worker : workers)
     {
@@ -87,11 +101,13 @@ void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
             worker->EnterShutdownMode();
     }
     
-    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
-    if (main_worker)
-        main_worker->EnterShutdownMode();
+    // 主线程事件队列不再接受新任务（Run 已退出，runding_=false）
+    // 不再对 main_worker 调用 EnterShutdownMode，主线程不跑业务帧
+
+    // 处理剩余的主线程事件
+    ProcessMainThreadEvents();
     
-    // 等待待处理任务处理完毕（最长 5 秒）
+    // 等待 Normal Worker 待处理任务处理完毕（最长 5 秒）
     auto start_time = std::chrono::steady_clock::now();
     bool all_empty = false;
     
@@ -106,9 +122,6 @@ void App::OnPhaseProcessingTasks(gb::ShutdownManager::ShutdownPhase phase)
                 break;
             }
         }
-        
-        if (main_worker && main_worker->GetPendingTaskCount() > 0)
-            all_empty = false;
         
         if (all_empty)
             break;
@@ -129,32 +142,23 @@ void App::OnPhaseCompletingTimers(gb::ShutdownManager::ShutdownPhase phase)
 {
     LOG_INFO("=== Phase 2: Completing current timer frame ===");
     
-    // 所有定时器管理器进入关闭模式（取消未来定时器，完成当前帧）
+    // 主线程系统定时器关闭
+    if (sys_timer_mgr_)
+        sys_timer_mgr_->EnterShutdownMode();
+    
+    // 所有 Normal Worker 定时器管理器进入关闭模式
     auto workers = gb::WorkerManager::Instance()->GetWorkers();
     for (auto& worker : workers)
     {
         if (worker && worker->GetTimerManager())
-        {
             worker->GetTimerManager()->EnterShutdownMode();
-        }
     }
     
-    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
-    if (main_worker && main_worker->GetTimerManager())
-    {
-        main_worker->GetTimerManager()->EnterShutdownMode();
-    }
-    
-    // 再执行一帧以完成当前定时器
+    // 主线程执行最后一次定时器 Update + 事件处理
     LOG_INFO("Executing final timer frame");
-    auto last_time = std::chrono::steady_clock::now();
-    auto current_time = std::chrono::steady_clock::now();
-    std::chrono::duration<float> elapsed = current_time - last_time;
-    
-    if (main_worker)
-    {
-        main_worker->ProcessFrame(elapsed.count());
-    }
+    if (sys_timer_mgr_)
+        sys_timer_mgr_->Update();
+    ProcessMainThreadEvents();
     
     LOG_INFO("Current timer frame completed");
     
@@ -172,6 +176,9 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
         LOG_ERROR("OnCleanup failed");
     }
 
+    // 停止抢占式线程池，确保所有重度任务完成
+    gb::ThreadPoolScheduler::Instance()->Stop();
+
     // 在 Worker 线程 join 前关闭 Redis 连接池（释放 IO 线程）
     CloseRedisPool();
 
@@ -188,13 +195,7 @@ void App::OnPhaseCleanup(gb::ShutdownManager::ShutdownPhase phase)
         }
     }
 
-    auto& worker_threads = gb::WorkerManager::Instance()->GetThreads();
-    for (auto& thread : worker_threads)
-    {
-        if (thread.joinable())
-            thread.join();
-    }
-
+    // Worker 线程由 WorkerManager 析构时 join
     if (main_worker)
         main_worker->OnCleanup();
 
@@ -221,7 +222,9 @@ void App::Run()
 	   return;
    }
 
-   main_worker->OnStartup();
+   // 不再在 Run() 中调用 main_worker->OnStartup()。
+   // Worker 的 OnStartup 由各 Normal Worker 在 InitLua() 后自行调用。
+   // 主线程不再充当 MainWorker，只做管理操作。
 
    // 将 NetworkManager 的处理器映射冻结为只读原子指针。
    // 此后，FindListenFunction 和 FindRpcFunction 变为无锁访问。
@@ -237,25 +240,32 @@ void App::Run()
         auto                         current_time = std::chrono::steady_clock::now();
         std::chrono::duration<float> elapsed      = current_time - last_time;
         last_time                                 = current_time;
-        if (OnUpdate(elapsed.count()) != 0)
-        {
-            break;
-        }
 
-        main_worker->ProcessFrame(elapsed.count());
+        // ── 1. 系统定时器（续期、健康检查、负载上报等）──
+        if (sys_timer_mgr_)
+            sys_timer_mgr_->Update();
+
+        // ── 2. 处理主线程事件队列（Bind/Unbind 路由变更等）──
+        ProcessMainThreadEvents();
+
+        // ── 2.5 冻结实体路由表 —— Bind/Unbind 变更对 IO/Worker 线程可见 ──
+        gb::NetworkManager::Instance()->GetRouter().FreezeEntityRoutes();
+
+        // ── 3. 主线程管理帧（OnUpdate/OnTick 不再包含业务逻辑）──
+        if (OnUpdate(elapsed.count()) != 0)
+            break;
+
+        // 主线程不再调用 main_worker->ProcessFrame() —— 不在此线程跑业务
+        // 主要通过 sys_timer_mgr_ + main_thread_events_ 处理管理操作
 
 	    if (OnTick() != 0)
-	    {
-		   break;
-	    }
+		    break;
 
+        // ── 4. 帧率控制 ──
         auto frame_end_time = std::chrono::steady_clock::now();
         auto frame_time     = frame_end_time - current_time;
-
         if (frame_time < frame_duration_)
-        {
             std::this_thread::sleep_for(frame_duration_ - frame_time);
-        }
     }
 
     LOG_INFO("Main loop exited, starting graceful shutdown");
@@ -265,5 +275,43 @@ void App::Run()
         if (!shutdown_manager_->IsShuttingDown())
             shutdown_manager_->Shutdown();
         shutdown_manager_->WaitForShutdown();
+    }
+}
+
+void App::ProcessMainThreadEvents()
+{
+    // 1. Drain App 本身的 main_thread_events_
+    std::function<void()> task;
+    while (main_thread_events_.try_dequeue(task))
+    {
+        if (task)
+            task();
+    }
+
+    // 2. Drain main_worker 的事件队列（兼容 PostToMain 等投递到 main_worker 的请求）
+    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
+    if (main_worker)
+    {
+        std::function<void()> mtask;
+        while (main_worker->TryDequeueEvent(mtask))
+        {
+            if (mtask)
+                mtask();
+        }
+    }
+}
+
+void App::PostToMain(std::function<void()>&& handler)
+{
+    if (handler)
+        main_thread_events_.enqueue(std::move(handler));
+}
+
+void App::PostToMain(const std::function<void()>& handler)
+{
+    if (handler)
+    {
+        std::function<void()> copy = handler;
+        main_thread_events_.enqueue(std::move(copy));
     }
 }

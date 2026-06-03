@@ -15,6 +15,7 @@
 #include <unordered_map>
 
 #include "worker_logic_interface.h"
+#include "network/router/service_worker_type.h"
 
 // 前置声明
 namespace gb
@@ -47,6 +48,9 @@ public:
 	virtual ~Worker();
 public:
     void Init(uint32_t id, size_t index);
+    /// 设置业务 Worker 类型（Normal/AI/Navigation），CreateWorker 时自动设置
+    void SetServiceType(ServiceWorkerType st) { service_type_ = st; }
+    ServiceWorkerType GetServiceType() const { return service_type_; }
     void SetWorkerLogic(std::shared_ptr<IWorkerLogic> worker_logic);
     void OnStart();
 	void Run();
@@ -88,11 +92,14 @@ public:
     /// 获取待处理任务数
     size_t GetPendingTaskCount() const { return events_.size_approx(); }
 
+    /// 尝试从事件队列取一个任务（被 App::ProcessMainThreadEvents 用来 drain main_worker 的事件）
+    bool TryDequeueEvent(std::function<void(void)>& task) { return events_.try_dequeue(task); }
+
 public:
     /// 每个worker的RPC序列计数器——无锁，线程本地所有权
     uint32_t AllocRpcSeq();
     void     StorePendingRpc(uint32_t local_seq, std::shared_ptr<RpcCall> call);
-    static std::shared_ptr<RpcCall> TakePendingRpc(uint32_t local_seq);
+    std::shared_ptr<RpcCall> TakePendingRpc(uint32_t local_seq);
 
 private:
     void InitLua();
@@ -101,6 +108,7 @@ private:
 private:
 	ScriptPtr	scriptPtr_;
 	WorkerType worker_type_;
+    ServiceWorkerType service_type_{SWT_Normal};
     uint32_t index_;
     uint32_t thread_id_;	 
 	moodycamel::ConcurrentQueue<std::function<void(void)>> events_;
@@ -117,6 +125,10 @@ private:
 
     /// 帧时长（默认 16ms ≈ 60fps）
     std::chrono::milliseconds frame_duration_{16};
+
+    /// 当前 Worker 的待处理 RPC 调用映射
+    /// 从 thread_local 迁移为成员变量，为线程池做准备
+    std::unordered_map<uint32_t, std::shared_ptr<RpcCall>> pending_rpcs_;
 };
 
 using WorkerPtr = std::shared_ptr<Worker>;

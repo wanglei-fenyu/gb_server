@@ -12,16 +12,24 @@ enum MsgMode : uint8_t
     Response = 2,
 };
 
-
+/// ═══════════════════════════════════════════════════════════════════════
+/// Meta — 消息头
+///
+/// entity_id 是路由主键（玩家 ID / 场景 ID / NPC ID），完整 64 位。
+/// dst_type / dst_inst 供后续 Multi-Instance 路由使用，当前未启用。
+///
+/// 重要：sizeof(Meta) 与原始版本相同，wire format 不变。
+/// ═══════════════════════════════════════════════════════════════════════
 struct Meta
 {
     MsgMode      mode{Msg};         // 消息模式 msg rpc rpc回复
-    uint64_t      id{0};            // 用户唯一标识
-    uint32_t      type{0};          // 消息类型
+    uint64_t     entity_id{0};      // 路由主键（玩家 ID / 场景 ID / NPC ID），完整 64 位
+    uint32_t     type{0};           // 消息类型
     CompressType compress_type{CompressTypeNone};   // 压缩类型
-    uint64_t      method{0};        // rpc方法
-    uint64_t      sequence{0};      // rpc序列号
+    uint64_t     method{0};         // rpc方法
+    uint64_t     sequence{0};       // rpc序列号
 };
+
 
 
 
