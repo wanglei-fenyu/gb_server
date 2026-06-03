@@ -12,10 +12,9 @@
 ///   与 server_test 共享 src/ 下的全部源码，但不启动 App 框架，
 ///   没有 Worker、NetworkManager 或 Lua 状态。
 
-import db.redis;
+#include "db/redis/redis_connection.h"
+#include "db/postgres/pg_connection.h"
 #include "log/log.h"
-
-import db.postgres;
 #include "report.h"
 #include <iostream>
 #include <string>

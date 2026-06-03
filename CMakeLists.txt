@@ -1,14 +1,18 @@
 cmake_minimum_required(VERSION 3.15)
-# Enable C++20 module scanning in all C++ sources (required for module
-# implementation units / importers in .cpp files to find .cppm interfaces).
-set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+# 包含自定义函数和配置
 include(cmake/base.cmake)
-# 项目定义（必须在 def.cmake 之前，因为 def.cmake 需要 CMAKE_CXX_COMPILER_ID 等变量）
-project(GBServer)
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/generators")
-# 包含自定义函数和配置（需要在 project() 之后以获取编译器信息）
 include(cmake/def.cmake)
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/generators")
+# 项目定义
+project(GBServer)
+
+if(MSVC)
+    # def.cmake 中的 MSVC 标志在 project() 之前被引入，MSVC 变量尚未设置，
+    # 导致其中的 add_compile_options(/EHa) 被静默跳过。
+    # 详见: cmake/def.cmake 中 if(MSVC) 块。
+    add_compile_options(/EHa)
+endif()
 
 # 引入 Conan toolchain
 if(EXISTS ${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
@@ -50,7 +54,7 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
 
-add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
+# add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
 add_subdirectory(test/server_test)
 add_subdirectory(test/client_test)
 

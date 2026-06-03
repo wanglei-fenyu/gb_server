@@ -1,12 +1,6 @@
 #include "redis_test.h"
+#include "db/redis/redis_connection.h"
 #include "report.h"
-#include <boost/redis/resp3/type.hpp>
-#include <boost/redis/resp3/node.hpp>
-#include <boost/redis/adapter/result.hpp>
-#include <boost/system/error_code.hpp>
-#include <boost/system/result.hpp>
-
-import db.redis;
 #include <future>
 #include <memory>
 #include "async_simple/coro/SyncAwait.h"

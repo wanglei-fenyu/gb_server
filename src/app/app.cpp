@@ -1,4 +1,4 @@
-#include "app.h"
+﻿#include "app.h"
 #include "worker/worker_manager.h"
 #include "async/signal_handler.h"
 #include "async/shutdown.h"
@@ -6,8 +6,7 @@
 #include "network/manager/network_manager.h"
 #include <thread>
 #include "base/res_path.h"
-
-import db.redis;
+#include "db/redis/register_redis.h"
 
 
 App::App(int argc, char* argv[])  : runding_(false), frame_duration_(std::chrono::milliseconds(16))

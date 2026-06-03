@@ -7,9 +7,6 @@
 #include "network/io/message_meta.h"
 #include <filesystem>
 #include "gbnet/buffer/compressed_def.h"
-
-import db.redis;
-import db.postgres;
 using namespace gb;
 
 
@@ -202,6 +199,8 @@ static void register_msgpack(std::shared_ptr<Script>& scriptPtr)
 }
 
 extern void register_proto_msg(std::shared_ptr<Script>& scriptPtr);
+extern void register_redis(std::shared_ptr<Script>& scriptPtr);
+extern void register_postgresql(std::shared_ptr<Script>& scriptPtr);
 
 void _lua_(std::shared_ptr<Script>& scriptPtr)
 {

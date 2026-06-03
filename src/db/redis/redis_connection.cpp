@@ -1,15 +1,9 @@
-module;
-
-#include "log/log.h"
+#include "redis_connection.h"
 #include "async_simple/coro/FutureAwaiter.h"
-#include <async_simple/Future.h>
-#include <async_simple/Promise.h>
 #include <boost/redis/src.hpp>
 #include <chrono>
 #include <optional>
 #include <memory>
-
-module db.redis;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 内部辅助：从 adapter::result<T> 中安全取值

@@ -15,23 +15,6 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 endif()
 
 # 用法：conan_link_libraries(target_name [PRIVATE|PUBLIC|INTERFACE])
-# 用法：add_game_cxx_modules(target_name)
-# 为支持 C++20 模块的编译器添加 .cppm 模块接口文件。
-# 必须配合 cmake_policy(SET CMP0144 NEW) 使用（各子工程已设置）。
-function(add_game_cxx_modules target_name)
-    # C++20 modules require Ninja or VS generator — silently skip for others.
-    if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28
-       AND CMAKE_GENERATOR MATCHES "Ninja|Visual Studio")
-        target_sources(${target_name} PRIVATE
-            FILE_SET CXX_MODULES
-            BASE_DIRS ${CMAKE_SOURCE_DIR}
-            FILES
-                ${CMAKE_SOURCE_DIR}/src/db/redis/db_redis.cppm
-                ${CMAKE_SOURCE_DIR}/src/db/postgres/db_postgres.cppm
-        )
-    endif()
-endfunction()
-
 macro(conan_link_libraries target_name)
     set(_link_type PRIVATE)
     foreach(_arg ${ARGN})

@@ -1,8 +1,5 @@
-module;
-
+#include "redis_pool.h"
 #include "log/log.h"
-
-module db.redis;
 
 RedisConnectionPool::~RedisConnectionPool()
 {

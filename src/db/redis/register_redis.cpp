@@ -1,13 +1,9 @@
-module;
-
+#include "register_redis.h"
+#include "redis_connection.h"
+#include "redis_pool.h"
 #include "worker/worker_manager.h"
 #include "log/log.h"
 #include <mutex>
-#include <boost/redis/resp3/node.hpp>
-#include <boost/redis/resp3/type.hpp>
-#include <boost/redis/adapter/result.hpp>
-
-module db.redis;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 全局 Redis 连接池（所有 Worker 共享）
