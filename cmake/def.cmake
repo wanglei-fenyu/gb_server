@@ -58,7 +58,6 @@ message("CMAKE_CONFIGURATION_TYPES: ${CMAKE_CONFIGURATION_TYPES}")
 if(MSVC)
     # MSVC 编译选项，无论使用 Visual Studio 还是 Ninja 生成器都会生效
     add_compile_options(/utf-8)
-	add_compile_options(/source-charset:utf-8 /execution-charset:utf-8)
     add_compile_options(/bigobj)
     add_compile_options(/EHa)
 endif()
