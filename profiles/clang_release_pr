@@ -15,7 +15,9 @@ protobuf/*:shared=False
 tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128","-Wno-register"]
 tools.build:skip_test=True
 tools.build:jobs=8
+tools.cmake.cmaketoolchain:generator=Ninja
 
 [buildenv]
 CC=clang-22
 CXX=clang++-22
+PATH=$penv{PATH}:/tmp/ninja
