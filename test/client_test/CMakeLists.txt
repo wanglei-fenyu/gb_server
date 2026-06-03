@@ -56,4 +56,6 @@ target_include_directories(${TARGET_NAME} PRIVATE
     ${CMAKE_CURRENT_LIST_DIR}         # 当前子工程目录
 )
 
+add_game_cxx_modules(${TARGET_NAME})
+
 conan_link_libraries(${TARGET_NAME} PRIVATE)

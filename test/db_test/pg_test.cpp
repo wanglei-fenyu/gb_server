@@ -1,7 +1,4 @@
 #include "pg_test.h"
-#include "db/postgres/pg_connection.h"
-#include "db/postgres/db_config.h"
-#include "db/postgres/db_result.h"
 #include "report.h"
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
@@ -13,6 +10,8 @@
 #include <string>
 #include <vector>
 #include <thread>
+
+import db.postgres;
 
 // ── 默认 PG 配置 ──
 static gb::DbConfig DefaultPgConfig()

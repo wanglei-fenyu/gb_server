@@ -1,8 +1,10 @@
-#include "db_pool.h"
-#include "pg_connection.h"
+module;
+
 #include "log/log.h"
 #include "async_simple/coro/FutureAwaiter.h"
 #include <boost/asio/post.hpp>
+
+module db.postgres;
 
 namespace gb
 {

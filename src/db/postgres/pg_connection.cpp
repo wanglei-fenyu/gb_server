@@ -1,11 +1,15 @@
-#include "pg_connection.h"
+module;
+
 #include "log/log.h"
 #include "async_simple/coro/FutureAwaiter.h"
 #include <libpq-fe.h>
 #include <boost/asio/post.hpp>
+#include <boost/asio/ip/tcp.hpp>
 #include <boost/system/error_code.hpp>
-#include <cstring>
+#include <cstdlib>
 #include <sstream>
+
+module db.postgres;
 
 namespace gb
 {

@@ -1,12 +1,14 @@
-#include "register_postgresql.h"
-#include "pg_connection.h"          // PgConnection（异步回调 API）
-#include "db_config.h"              // DbConfig
+module;
+
 #include "worker/worker_manager.h"
-#include "script/script.h"          // Script（用于 lua_xmove 迁移到主状态）
+#include "script/script.h"
 #include "log/log.h"
 #include <boost/asio/executor_work_guard.hpp>
+#include <boost/asio/io_context.hpp>
 #include <mutex>
 #include <thread>
+
+module db.postgres;
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 全局状态
