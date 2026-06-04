@@ -8,6 +8,7 @@
 #include <memory>
 #include <mutex>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 namespace gb
@@ -56,6 +57,7 @@ public:
             thread_count = 1;
 
         running_ = true;
+        thread_ids_.reserve(thread_count);
         for (size_t i = 0; i < thread_count; ++i)
         {
             threads_.emplace_back([this, i]() {
@@ -63,6 +65,7 @@ public:
                 WorkerLoop();
                 LOG_INFO("ThreadPool worker {} stopped", i);
             });
+            thread_ids_.insert(threads_.back().get_id());
         }
         LOG_INFO("ThreadPool initialized with {} threads", thread_count);
     }
@@ -102,6 +105,13 @@ public:
 
     /// 线程池线程数。
     size_t ThreadCount() const { return threads_.size(); }
+
+    /// 当前线程是否为 ThreadPool 线程。
+    bool IsThreadPoolThread() const
+    {
+        auto id = std::this_thread::get_id();
+        return thread_ids_.find(id) != thread_ids_.end();
+    }
 
 private:
     void WorkerLoop()
@@ -151,6 +161,7 @@ private:
     std::atomic<bool>                         running_{false};
     std::atomic<size_t>                       pending_{0};
     std::vector<std::thread>                  threads_;
+    std::unordered_set<std::thread::id>       thread_ids_;
     moodycamel::ConcurrentQueue<std::function<void()>> queue_;
 
     std::mutex                                wake_mutex_;

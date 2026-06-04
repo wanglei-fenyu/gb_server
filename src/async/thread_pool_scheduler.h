@@ -16,14 +16,17 @@ class ThreadPoolAwaiter;
 
 /// ThreadPoolScheduler —— 抢占式线程池的统一调度抽象。
 ///
+/// 继承自 async_simple::Executor，可原生与 async_simple 协程库配合使用。
+///
 /// ┌──────────────────────────────────────────────┐
 /// │              ThreadPoolScheduler             │
-/// │  (Singleton, 唯一公开调度入口)                │
+/// │  (Singleton + async_simple::Executor)        │
 /// │                                              │
-/// │  + Execute(task)      ← 裸执行，不回投       │
-/// │  + Dispatch(task,cb)  ← 回调风格             │
-/// │  + Post(task)         ← 回投但不关心返回值   │
-/// │  + Schedule<T>(task)  ← 协程风格 (Lazy<T>)   │
+/// │  + schedule(func)      ← Executor 接口       │
+/// │  + Execute(task)       ← 裸执行，不回投      │
+/// │  + Dispatch(task,cb)   ← 回调风格            │
+/// │  + Post(task)          ← 回投但不关心返回值  │
+/// │  + Schedule<T>(task)   ← 协程风格 (Lazy<T>)  │
 /// │                                              │
 /// │  ┌────────────────────────────────┐          │
 /// │  │  ThreadPool (裸执行引擎)       │          │
@@ -37,7 +40,8 @@ class ThreadPoolAwaiter;
 ///   通过 Worker::Post 把回调/协程恢复投递到发起
 ///   调用的 Worker 线程。
 ///
-class ThreadPoolScheduler : public Singleton<ThreadPoolScheduler>
+class ThreadPoolScheduler : public Singleton<ThreadPoolScheduler>,
+                            public async_simple::Executor
 {
 public:
     /// 初始化线程池。
@@ -142,6 +146,38 @@ public:
     ///   // 回到 Worker 线程
     template <typename T>
     [[nodiscard]] ThreadPoolAwaiter<T> Schedule(std::function<T()> task);
+
+    // ── async_simple::Executor 接口 ─────────────────────
+
+    ThreadPoolScheduler() : async_simple::Executor("thread_pool") {}
+
+    /// 在 ThreadPool 上调度函数执行（Executor 核心接口）。
+    /// 语义：在 TP 线程上异步执行 func，由调用者管理协程上下文。
+    bool schedule(Func func) override
+    {
+        thread_pool_.Execute(std::move(func));
+        return true;
+    }
+
+    /// 当前线程是否为 ThreadPool 线程。
+    bool currentThreadInExecutor() const override
+    {
+        return thread_pool_.IsThreadPoolThread();
+    }
+
+    /// 返回统计信息（待处理任务数）。
+    async_simple::ExecutorStat stat() const override
+    {
+        async_simple::ExecutorStat s;
+        s.pendingTaskCount = thread_pool_.PendingCount();
+        return s;
+    }
+
+    /// ThreadPool 不提供 IOExecutor。
+    async_simple::IOExecutor* getIOExecutor() override
+    {
+        return nullptr;
+    }
 
 private:
     ThreadPool thread_pool_;

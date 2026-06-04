@@ -40,6 +40,7 @@ find_package(rapidxml REQUIRED)
 find_package(sol2 REQUIRED)
 find_package(cxxopts REQUIRED)
 find_package(PostgreSQL REQUIRED)
+find_package(Catch2 REQUIRED)
 
 # 定义全局编译宏
 add_compile_definitions(
@@ -54,12 +55,16 @@ set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
 
-# add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
+#tools
+add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
+
+#test
 add_subdirectory(test/server_test)
 add_subdirectory(test/client_test)
+add_subdirectory(test/db_test)
+add_subdirectory(test/unit_test)
 
 # Game server processes
 add_subdirectory(server/login_server)
 add_subdirectory(server/gateway_server)
 add_subdirectory(server/scene_server)
-add_subdirectory(test/db_test)

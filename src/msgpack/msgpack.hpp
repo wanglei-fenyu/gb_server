@@ -474,54 +474,23 @@ private:
 private:
     std::bitset<8> to_binary(int8_t value)
     {
-        if (value < 0)
-        {
-            auto abs_value = std::abs(value);
-            return ~abs_value + 1;
-        }
-        else
-        {
-            return {(uint8_t)value};
-        }
+        // C++20: signed→unsigned conversion is well-defined two's complement
+        return {static_cast<uint8_t>(value)};
     }
 
     std::bitset<16> to_binary(int16_t value)
     {
-        if (value < 0)
-        {
-            auto abs_value = std::abs(value);
-            return ~abs_value + 1;
-        }
-        else
-        {
-            return {(uint16_t)value};
-        }
+        return {static_cast<uint16_t>(value)};
     }
 
     std::bitset<32> to_binary(int32_t value)
     {
-        if (value < 0)
-        {
-            auto abs_value = std::abs(value);
-            return ~abs_value + 1;
-        }
-        else
-        {
-            return {(uint32_t)value};
-        }
+        return {static_cast<uint32_t>(value)};
     }
 
     std::bitset<64> to_binary(int64_t value)
     {
-        if (value < 0)
-        {
-            auto abs_value = std::abs(value);
-            return ~abs_value + 1;
-        }
-        else
-        {
-            return {(uint64_t)value};
-        }
+        return {static_cast<uint64_t>(value)};
     }
 
 private:
@@ -539,7 +508,7 @@ inline void Packer::pack_type(const int8_t &value)
 template <>
 inline void Packer::pack_type(const int16_t &value)
 {
-	if (std::abs(value) < std::abs(std::numeric_limits<int8_t>::min()))
+	if (value <= std::numeric_limits<int8_t>::max() && value >= std::numeric_limits<int8_t>::min())
 	{
 		pack_type(int8_t(value));
 	}
@@ -557,7 +526,7 @@ inline void Packer::pack_type(const int16_t &value)
 template <>
 inline void Packer::pack_type(const int32_t &value)
 {
-	if (std::abs(value) < std::abs(std::numeric_limits<int16_t>::min()))
+	if (value <= std::numeric_limits<int16_t>::max() && value >= std::numeric_limits<int16_t>::min())
 	{
 		pack_type((int16_t)value);
 	}
@@ -575,7 +544,7 @@ inline void Packer::pack_type(const int32_t &value)
 template <>
 inline void Packer::pack_type(const int64_t &value)
 {
-	if (std::abs(value) < std::abs(std::numeric_limits<int32_t>::min()))
+	if (value <= std::numeric_limits<int32_t>::max() && value >= std::numeric_limits<int32_t>::min())
 	{
 		pack_type((int32_t)value);
 	}
@@ -791,7 +760,7 @@ std::vector<uint8_t> pack(Args& ...args)
         }
         else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
         {
-            for (int i = 0; i < obj.retuen_count(); i++)
+            for (int i = 0; i < obj.return_count(); i++)
             {
                 packer(obj[i]);
             }
@@ -861,7 +830,7 @@ std::vector<uint8_t> pack(std::tuple<Args...>& args)
         }
         else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
         {
-            for (int i = 0; i < obj.retuen_count(); i++)
+            for (int i = 0; i < obj.return_count(); i++)
             {
                 packer(obj[i]);
             }
@@ -1027,7 +996,7 @@ private:
     template<class T>
     void unpack_array(T& array)
     {
-        using ValueType = typename T::vlaue_type;
+        using ValueType = typename T::value_type;
         if (safe_data() == (uint8_t)format_t::array32)
         {
             safe_incremen();
@@ -1037,9 +1006,12 @@ private:
                 array_size += uint32_t(safe_data()) << 8 * (i-1);
                 safe_incremen();
             }
-            if (array_size)
+            if constexpr (requires { array.reserve(std::size_t{}); })
             {
-                array.reserve(array_size);
+                if (array_size)
+                {
+                    array.reserve(array_size);
+                }
             }
             for (auto i = 0; i < array_size; ++i)
             {
@@ -1057,9 +1029,12 @@ private:
                 array_size += (uint16_t)(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            if (array_size > 0)
+            if constexpr (requires { array.reserve(std::size_t{}); })
             {
-                array.reserve(array_size);
+                if (array_size > 0)
+                {
+                    array.reserve(array_size);
+                }
             }
             for (auto i = 0; i < array_size; ++i)
             {
@@ -1077,31 +1052,38 @@ private:
                 table_size += uint32_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            if (table_size > 0)
+            // table format uses array[key-1] — only for random-access containers
+            if constexpr (requires { std::declval<T&>()[std::declval<int64_t>()]; })
             {
-                array.resize(table_size);
-            }
-            for (auto i = 0; i < table_size; ++i)
-            {
-                int64_t key{};
-                ValueType val{};
-                unpack_type(key);
-                unpack_type(val);
-                array[key - 1] = std::move(val);
+                if (table_size > 0)
+                {
+                    array.resize(table_size);
+                }
+                for (auto i = 0; i < table_size; ++i)
+                {
+                    int64_t key{};
+                    ValueType val{};
+                    unpack_type(key);
+                    unpack_type(val);
+                    array[key - 1] = std::move(val);
+                }
             }
         }
         else
         {
             std::size_t array_size = safe_data() & 0b00001111;
             safe_incremen();
-            if (array_size)
+            if constexpr (requires { array.reserve(std::size_t{}); })
             {
-                array.reserver(array_size);
+                if (array_size)
+                {
+                    array.reserve(array_size);
+                }
             }
             for (auto i = 0; i < array_size; ++i)
 			{
                 ValueType val{};
-                unpack_array(val);
+                unpack_type(val);
                 array.emplace_back(val);
 			}
         }
@@ -1110,7 +1092,7 @@ private:
     template<typename T>
     void unpack_stdarray(T& array)
     {
-        using ValueType = typename T::value;
+        using ValueType = typename T::value_type;
         auto vec = std::vector<ValueType>{};
         unpack_array(vec);
         std::copy(vec.begin(), vec.end(), array.begin());
@@ -1130,9 +1112,12 @@ private:
                 map_size += uint32_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            if (map_size)
+            if constexpr (requires { map.reserve(std::size_t{}); })
             {
-                map.reserve(map_size);
+                if (map_size)
+                {
+                    map.reserve(map_size);
+                }
             }
             for (auto i = 0; i < map_size; ++i)
             {
@@ -1152,9 +1137,12 @@ private:
                 map_size += uint16_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            if (map_size)
+            if constexpr (requires { map.reserve(std::size_t{}); })
             {
-                map.reserve(map_size);
+                if (map_size)
+                {
+                    map.reserve(map_size);
+                }
             }
             for (auto i = 0; i < map_size; ++i)
             {
