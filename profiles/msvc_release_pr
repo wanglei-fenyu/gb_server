@@ -9,7 +9,6 @@ os=Windows
 
 [options]
 boost/*:without_cobalt=True
-protobuf/*:shared=False
 
 [conf]
 tools.microsoft.msbuild:installation_path=C:/Program Files/Microsoft Visual Studio/18/Community
