@@ -41,7 +41,7 @@ void TimerWorker::start()
 
 	std::lock_guard<std::mutex> _lock(_timer_mutex);
     _timer.expires_after(std::chrono::duration_cast<std::chrono::microseconds>(_time_duration));
-    _timer.async_wait(_strand.wrap(asio_bind(&TimerWorker::on_timeout, shared_from_this(), _(1))));
+    _timer.async_wait(Asio::bind_executor(_strand, asio_bind(&TimerWorker::on_timeout, shared_from_this(), _(1))));
 
 }
 
@@ -66,7 +66,7 @@ void TimerWorker::on_timeout(const Error_code& ec)
         std::lock_guard<std::mutex> _lock(_timer_mutex);
 		//auto duration_since_epoch = std::chrono::duration_cast<std::chrono::microseconds>(_time_duration);
         _timer.expires_at(_timer.expiry() + std::chrono::duration_cast<std::chrono::microseconds>(_time_duration));
-		_timer.async_wait(_strand.wrap(asio_bind(&TimerWorker::on_timeout, shared_from_this(), _(1))));
+		_timer.async_wait(Asio::bind_executor(_strand, asio_bind(&TimerWorker::on_timeout, shared_from_this(), _(1))));
     }
 }
 

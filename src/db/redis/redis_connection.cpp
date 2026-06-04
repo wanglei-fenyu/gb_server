@@ -52,7 +52,7 @@ static bool ExtractOptionalValue(
 RedisConnection::RedisConnection()
     : work_guard_(boost::asio::make_work_guard(io_context_))
 {
-    conn_ = std::make_unique<boost::redis::connection>(io_context_);
+    conn_ = std::make_unique<boost::redis::connection>(io_context_, boost::redis::logger{});
     io_thread_ = std::thread([this]() { io_context_.run(); });
     connected_ = false;
 }
@@ -100,7 +100,7 @@ bool RedisConnection::Connect(const RedisConfig& cfg)
     auto               conn_fut = conn_promise.get_future();
 
     boost::asio::post(io_context_, [this, redis_cfg, &conn_promise]() {
-        conn_->async_run(redis_cfg, {},
+        conn_->async_run(redis_cfg,
                          [](boost::system::error_code ec) {
                              if (ec)
                                  LOG_ERROR("Redis async_run stopped: {}", ec.message());
