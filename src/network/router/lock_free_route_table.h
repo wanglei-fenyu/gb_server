@@ -148,7 +148,7 @@ public:
         auto* snapshot = new Table();
         for (auto& e : *pending_)
         {
-            if (!snapshot->empty() && snapshot->back().end >= e.begin)
+            if (!snapshot->empty() && snapshot->back().end > e.begin)
             {
                 // 合并重叠（取最新的 worker_index）
                 if (snapshot->back().end < e.end)

@@ -36,19 +36,35 @@ public:
     int OnUnInit() override { return 0; }
 
 private:
-    enum MenuLevel { MainMenu, MsgpackMenu };
+    enum MenuLevel { MainMenu, MsgpackMenu, RouteMenu, SchedulerMenu };
 
     void PrintMenu();
     void HandleMenuCommand(char cmd);
     void PrintMainMenu();
     void PrintMsgpackMenu();
+    void PrintRouteMenu();
+    void PrintSchedulerMenu();
     void HandleMainCmd(char cmd);
     void HandleMsgpackCmd(char cmd);
+    void HandleRouteCmd(char cmd);
+    void HandleSchedulerCmd(char cmd);
     void RunSingleMsgpackTest(int index);
+    void RunSingleRouteTest(int index);
+    void RunSingleSchedulerTest(int index);
     int  RunForkedTest(const char* filter);
+
+    // ── 调度器集成测试（需 Worker 上下文，在父进程中运行）──
+    int RunWorkerExecutorDispatchTest();
+    int RunWorkerExecutorMainTest();
+    int RunThreadPoolDispatchTest();
+    int RunThreadPoolPostTest();
 
     static constexpr int kMsgpackTestCount = 40;
     static const MsgpackTestCase kMsgpackTests[kMsgpackTestCount];
+    static constexpr int kRouteTestCount = 23;
+    static const MsgpackTestCase kRouteTests[kRouteTestCount];
+    static constexpr int kSchedulerTestCount = 4;
+    static const MsgpackTestCase kSchedulerTests[kSchedulerTestCount];
 
     std::string       exe_path_;
     MenuLevel         current_level_{MainMenu};

@@ -54,6 +54,39 @@ const MsgpackTestCase TestApp::kMsgpackTests[] = {
     {"msgpack: 异构 tuple 自由函数序列化反序列化"},
 };
 
+const MsgpackTestCase TestApp::kSchedulerTests[] = {
+    {"WorkerExecutor 绑定 Worker(1) — Dispatch 投递"},
+    {"WorkerExecutor::Main() — 主线程分发"},
+    {"ThreadPoolScheduler Dispatch<int> — Worker 上下文"},
+    {"ThreadPoolScheduler Post — Worker 上下文"},
+};
+
+const MsgpackTestCase TestApp::kRouteTests[] = {
+    {"route: 空表 Lookup 返回 kInvalidWorker"},
+    {"route: Bind 单例并能 Lookup"},
+    {"route: Bind 区间并在区间内查找"},
+    {"route: Bind 区间区间外返回 Invalid"},
+    {"route: 重叠 Bind 覆盖旧条目"},
+    {"route: Unbind 移除单例"},
+    {"route: Unbind 从区间中间拆分"},
+    {"route: Unbind 区间开头"},
+    {"route: Unbind 区间末尾"},
+    {"route: Freeze 发布多条目变更"},
+    {"route: 默认 resolver 返回 SWT_Normal"},
+    {"route: 自定义 resolver 映射消息类型"},
+    {"route: RegisterWorker + GetWorker 一对一"},
+    {"route: RegisterWorker 多 worker 注册"},
+    {"route: Router::GetEntityExecutor 未绑定返回无效"},
+    {"route: Router::GetServiceExecutor 未注册 worker 回退到 Main"},
+    {"route: Router::Bind→Freeze→GetEntityExecutor 验证路由表"},
+    {"route: SequenceId 编解码往返"},
+    {"route: SequenceId 零值"},
+    {"route: SequenceId 边界值"},
+    {"route: SequenceId worker_index 编码偏移"},
+    {"route: Meta 默认构造各字段为零"},
+    {"route: MsgMode 枚举值定义"},
+};
+
 TestApp::TestApp(int argc, char* argv[])
     : App(argc, argv)
     , exe_path_(argv[0])
@@ -95,7 +128,8 @@ void TestApp::PrintMainMenu()
     printf("  [3] 递增计数器        -- 发送计数任务\n");
     printf("  [4] 查看状态          -- 帧数 / 计数 / 线程池\n");
     printf("  [5] msgpack 测试      -- 进入 msgpack 二级菜单\n");
-    printf("  [6] msgpack 打解包演示 -- 打包/解包并显示二进制格式\n");
+    printf("  [6] 路由测试           -- 进入路由二级菜单（实体路由/服务路由/RPC 序列号）\n");
+    printf("  [7] msgpack 打解包演示 -- 打包/解包并显示二进制格式\n");
     printf("  [q] 退出              -- 退出程序\n");
     printf("========================\n");
     printf("> ");
@@ -151,7 +185,11 @@ void TestApp::HandleMainCmd(char cmd)
         current_level_ = MsgpackMenu;
         break;
 
-    case '6': {
+    case '6':
+        current_level_ = RouteMenu;
+        break;
+
+    case '7': {
         gb::msgpack::Packer packer;
         packer(int32_t{42}, 3.14f, std::string{"hello"}, true);
         const auto& data = packer.vector();
@@ -226,6 +264,91 @@ void TestApp::HandleMsgpackCmd(char cmd)
     menu_drawn_ = false;
 }
 
+// ─── Route Submenu ────────────────────────────────────────
+
+void TestApp::PrintRouteMenu()
+{
+    printf("\n======= 路由测试用例 (%d) =======\n", kRouteTestCount);
+    printf("  ── 实体路由 ──\n");
+    printf("  [ 1] %s\n", kRouteTests[0].name);
+    printf("  [ 2] %s\n", kRouteTests[1].name);
+    printf("  [ 3] %s\n", kRouteTests[2].name);
+    printf("  [ 4] %s\n", kRouteTests[3].name);
+    printf("  [ 5] %s\n", kRouteTests[4].name);
+    printf("  [ 6] %s\n", kRouteTests[5].name);
+    printf("  [ 7] %s\n", kRouteTests[6].name);
+    printf("  [ 8] %s\n", kRouteTests[7].name);
+    printf("  [ 9] %s\n", kRouteTests[8].name);
+    printf("  [10] %s\n", kRouteTests[9].name);
+    printf("  ── 服务路由 ──\n");
+    printf("  [11] %s\n", kRouteTests[10].name);
+    printf("  [12] %s\n", kRouteTests[11].name);
+    printf("  [13] %s\n", kRouteTests[12].name);
+    printf("  [14] %s\n", kRouteTests[13].name);
+    printf("  ── Router 调度 ──\n");
+    printf("  [15] %s\n", kRouteTests[14].name);
+    printf("  [16] %s\n", kRouteTests[15].name);
+    printf("  [17] %s\n", kRouteTests[16].name);
+    printf("  ── RPC 序列号 ──\n");
+    printf("  [18] %s\n", kRouteTests[17].name);
+    printf("  [19] %s\n", kRouteTests[18].name);
+    printf("  [20] %s\n", kRouteTests[19].name);
+    printf("  [21] %s\n", kRouteTests[20].name);
+    printf("  ── 消息头结构 ──\n");
+    printf("  [22] %s\n", kRouteTests[21].name);
+    printf("  [23] %s\n", kRouteTests[22].name);
+    printf("  [a] 运行全部\n");
+    printf("  [b] 返回主菜单\n");
+    printf("==================================\n");
+    printf("> ");
+    fflush(stdout);
+}
+
+void TestApp::HandleRouteCmd(char cmd)
+{
+    if (cmd == 'b' || cmd == 'B')
+    {
+        current_level_ = MainMenu;
+        menu_drawn_ = false;
+        return;
+    }
+
+    if (cmd == 'a' || cmd == 'A')
+    {
+        printf("  -> 运行全部路由测试...\n");
+        fflush(stdout);
+        int ret = RunForkedTest("[route]");
+        if (ret == 0)
+            printf("  -> 全部路由测试通过\n");
+        else
+            printf("  -> 路由测试失败 (exit=%d)\n", ret);
+        fflush(stdout);
+        menu_drawn_ = false;
+        return;
+    }
+
+    printf("  未知命令: '%c'\n", cmd);
+    menu_drawn_ = false;
+}
+
+void TestApp::RunSingleRouteTest(int index)
+{
+    if (index < 0 || index >= kRouteTestCount)
+    {
+        printf("  无效编号\n");
+        return;
+    }
+
+    printf("  -> 运行: %s\n", kRouteTests[index].name);
+    fflush(stdout);
+    int ret = RunForkedTest(kRouteTests[index].name);
+    if (ret == 0)
+        printf("  -> 通过\n");
+    else
+        printf("  -> 失败 (exit=%d)\n", ret);
+    fflush(stdout);
+}
+
 // ─── Fork+Exec helpers ─────────────────────────────────────
 
 int TestApp::RunForkedTest(const char* filter)
@@ -274,8 +397,9 @@ void TestApp::PrintMenu()
 {
     switch (current_level_)
     {
-    case MainMenu:    PrintMainMenu();  break;
+    case MainMenu:    PrintMainMenu();    break;
     case MsgpackMenu: PrintMsgpackMenu(); break;
+    case RouteMenu:   PrintRouteMenu();  break;
     }
 }
 
@@ -285,6 +409,7 @@ void TestApp::HandleMenuCommand(char cmd)
     {
     case MainMenu:    HandleMainCmd(cmd);    break;
     case MsgpackMenu: HandleMsgpackCmd(cmd); break;
+    case RouteMenu:   HandleRouteCmd(cmd);   break;
     }
 }
 
@@ -312,7 +437,7 @@ int TestApp::OnUpdate(float)
                 if (c == '\n' || c == '\r')
                     continue;
 
-                if (current_level_ == MsgpackMenu && c >= '0' && c <= '9')
+                if ((current_level_ == MsgpackMenu || current_level_ == RouteMenu) && c >= '0' && c <= '9')
                 {
                     int num = 0;
                     while (i < n && buf[i] >= '0' && buf[i] <= '9')
@@ -321,14 +446,20 @@ int TestApp::OnUpdate(float)
                         i++;
                     }
                     i--;
-                    if (num >= 1 && num <= kMsgpackTestCount)
+                    if (current_level_ == MsgpackMenu && num >= 1 && num <= kMsgpackTestCount)
                     {
                         RunSingleMsgpackTest(num - 1);
                         menu_drawn_ = false;
                     }
+                    else if (current_level_ == RouteMenu && num >= 1 && num <= kRouteTestCount)
+                    {
+                        RunSingleRouteTest(num - 1);
+                        menu_drawn_ = false;
+                    }
                     else
                     {
-                        printf("  无效编号: %d (1-%d)\n", num, kMsgpackTestCount);
+                        int max = (current_level_ == MsgpackMenu) ? kMsgpackTestCount : kRouteTestCount;
+                        printf("  无效编号: %d (1-%d)\n", num, max);
                         fflush(stdout);
                         menu_drawn_ = false;
                     }
