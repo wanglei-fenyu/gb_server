@@ -106,12 +106,9 @@ IoWorkerPtr IoServicePool::GetWorkerById(uint32_t id)
 
 std::pair<int, IoService&> IoServicePool::GetIoService()
 {
-    int        cur_service = _next_service;
-    IoService& ios         = m_workers[_next_service]->GetIoContext();
-    ++_next_service;
-    if (_next_service == m_workers.size())
-        _next_service = 0;
-    return {cur_service, ios};
+    // 使用原子 fetch_add 实现无锁轮询，避免数据竞争
+    size_t index = _next_service.fetch_add(1, std::memory_order_relaxed) % m_workers.size();
+    return {static_cast<int>(index), m_workers[index]->GetIoContext()};
 }
 
 const std::vector<IoWorkerPtr>& IoServicePool::Workers() const

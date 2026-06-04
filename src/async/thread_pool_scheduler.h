@@ -71,6 +71,7 @@ public:
 
     // ── 回调风格 ───────────────────────────────────────
 
+
     /// 在 ThreadPool 上执行重度任务，执行完后自动回投
     /// 到发起调用的 Worker 线程调用 callback。
     ///
@@ -83,19 +84,13 @@ public:
     ///       []() -> PathResult { return Pathfind(start, end); },
     ///       [](PathResult r) { HandleResult(r); }
     ///   );
-    template <typename T>
-    void Dispatch(std::function<T()> task, std::function<void(T)> callback)
-    {
+      // 通用模板版本（仅当 T 非 void 时参与重载）
+    template <typename T, typename = std::enable_if_t<!std::is_void_v<T>>>
+    void Dispatch(std::function<T()> task, std::function<void(T)> callback) {
         auto worker = WorkerManager::Instance()->GetCurWorker();
-        if (!worker)
-        {
+        if (!worker) {
             LOG_WARN("ThreadPoolScheduler::Dispatch called from non-Worker thread");
-            if constexpr (std::is_void_v<T>) {
-                task();
-                callback();
-            } else {
-                callback(task());
-            }
+            callback(task());
             return;
         }
         thread_pool_.Execute([
@@ -103,16 +98,33 @@ public:
             task   = std::move(task),
             cb     = std::move(callback)
         ]() mutable {
-            if constexpr (std::is_void_v<T>) {
-                task();
-                worker->Post([cb = std::move(cb)]() { cb(); });
-            } else {
-                auto result = task();
-                worker->Post([result = std::move(result), cb = std::move(cb)]() { cb(std::move(result)); });
-            }
+            auto result = task();
+            worker->Post([result = std::move(result), cb = std::move(cb)]() mutable {
+                cb(std::move(result));
+            });
         });
     }
 
+    // void 版本：普通成员函数重载（非模板）
+    void Dispatch(std::function<void()> task, std::function<void()> callback) {
+        auto worker = WorkerManager::Instance()->GetCurWorker();
+        if (!worker) {
+            LOG_WARN("ThreadPoolScheduler::Dispatch called from non-Worker thread");
+            task();
+            if (callback) callback();
+            return;
+        }
+        thread_pool_.Execute([
+            worker = std::move(worker),
+            task   = std::move(task),
+            cb     = std::move(callback)
+        ]() mutable {
+            task();
+            worker->Post([cb = std::move(cb)]() mutable {
+                if (cb) cb();
+            });
+        });
+    }
     /// 在 ThreadPool 上执行重度任务，执行完后自动回投
     /// 到发起 Worker 线程（不关心返回值）。
     ///

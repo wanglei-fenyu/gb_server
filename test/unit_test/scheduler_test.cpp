@@ -272,7 +272,7 @@ TEST_CASE("scheduler: Dispatch<void> 无 Worker 时回退 inline", "[scheduler][
     sched.Init(2);
 
     std::atomic<bool> called{false};
-    sched.Dispatch<void>(
+    sched.Dispatch(
         []() { /* do nothing */ },
         [&]() { called.store(true); }
     );

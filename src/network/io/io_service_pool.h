@@ -64,7 +64,7 @@ public:
 private:
 	std::vector<IoWorkerPtr> m_workers;
 	std::map<uint32_t, IoWorkerPtr> m_worker_map;			//key 线程id
-    size_t                        _next_service;
+    std::atomic<size_t> _next_service{0};
 };
 
 

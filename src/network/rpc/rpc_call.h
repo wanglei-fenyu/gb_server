@@ -3,9 +3,12 @@
 #include "rpc_function.hpp"
 #include "network/rpc/function.hpp"
 #include "network/rpc/executor.h"
+#include "network/rpc/rpc_timer_pool.h"
 #include <atomic>
 #include <mutex>
 #include <type_traits>
+#include <memory>
+#include <functional>
 
 
 namespace gb
@@ -78,12 +81,12 @@ private:
     uint64_t                  id_;
     uint32_t                  worker_index_{0};
     uint32_t                  local_seq_{0};
-    mutable std::optional<Asio::steady_timer> timer_;
+    RpcTimerPool::TimerHandlePtr timer_handle_;
     std::chrono::steady_clock::duration timeout_;
     std::function<void()>     timeout_func_;
     std::function<void()>     cancel_func_;
     std::atomic<RpcState>     state_;
-    WorkerExecutor                  callback_executor_;
+    WorkerExecutor            callback_executor_;
     mutable std::mutex        callback_mutex_;
     std::shared_ptr<Session>  session_;
     rpc_done_call             done_call_bcak_;

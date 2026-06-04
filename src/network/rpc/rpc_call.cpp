@@ -1,14 +1,22 @@
 ﻿#include "rpc_call.h"
+#include "rpc_timer_pool.h"
 #include "base/timer_help.h"
 #include "log/log.h"
 #include "worker/worker.h"
 
 namespace gb
 {
-RpcCall::RpcCall() :
-    id_(0), worker_index_(0), local_seq_(0), timeout_(std::chrono::milliseconds(kRpcdefaultTimeout)),
-    timeout_func_(nullptr), cancel_func_(nullptr), state_(RpcState::Pending),
-    session_(nullptr), done_call_bcak_(nullptr), timer_(std::nullopt)
+
+RpcCall::RpcCall()
+    : id_(0)
+    , worker_index_(0)
+    , local_seq_(0)
+    , timeout_(std::chrono::milliseconds(kRpcdefaultTimeout))
+    , timeout_func_(nullptr)
+    , cancel_func_(nullptr)
+    , state_(RpcState::Pending)
+    , session_(nullptr)
+    , done_call_bcak_(nullptr)
 {
 }
 
@@ -32,19 +40,21 @@ void RpcCall::SetCancel(std::function<void()> cancel_fun)
     cancel_func_ = std::move(cancel_fun);
 }
 
-void RpcCall::SetTimeout(int64_t timeout) 
+void RpcCall::SetTimeout(int64_t timeout)
 {
     timeout_ = std::chrono::milliseconds(timeout);
-    if (!timer_ && HasSession()) {
-         timer_ = Asio::steady_timer(GetSession()->ioservice());
+    if (!timer_handle_ && HasSession())
+    {
+        timer_handle_ = GetCurrentThreadTimerPool()->Acquire(session_->ioservice());
     }
 }
 
 void RpcCall::SetSession(const std::shared_ptr<Session>& session)
 {
     session_ = session;
-    if (!timer_ && session_) {
-         timer_ = Asio::steady_timer(GetSession()->ioservice());
+    if (!timer_handle_ && session_)
+    {
+        timer_handle_ = GetCurrentThreadTimerPool()->Acquire(session_->ioservice());
     }
 }
 
@@ -132,7 +142,7 @@ bool RpcCall::IsError()
     return ErrorCode() != RpcErrorCode::None;
 }
 
-RpcErrorCode RpcCall::ErrorCode() 
+RpcErrorCode RpcCall::ErrorCode()
 {
     switch (state_.load(std::memory_order_acquire))
     {
@@ -145,7 +155,7 @@ RpcErrorCode RpcCall::ErrorCode()
 
 void RpcCall::StartTimer()
 {
-    if (!session_ || !timer_)
+    if (!session_ || !timer_handle_)
     {
         RpcState expected = RpcState::Pending;
         if (!state_.compare_exchange_strong(expected, RpcState::InvalidRequest, std::memory_order_acq_rel, std::memory_order_acquire))
@@ -161,8 +171,9 @@ void RpcCall::StartTimer()
         Finish(std::move(cancel_callback));
         return;
     }
-    timer_->expires_after(timeout_);
-    timer_->async_wait([self = shared_from_this()](const Error_code& error) {
+
+    timer_handle_->timer.expires_after(timeout_);
+    timer_handle_->timer.async_wait([self = shared_from_this()](const Error_code& error) {
         if (error == Asio::error::operation_aborted)
             return;
 
@@ -213,8 +224,16 @@ void RpcCall::Finish(std::function<void()> completion)
 
 void RpcCall::StopTimer()
 {
-    if (timer_ && timer_->expiry() > std::chrono::steady_clock::now())
-        timer_->cancel();
+    if (timer_handle_ && timer_handle_->timer.expiry() > std::chrono::steady_clock::now())
+    {
+        timer_handle_->timer.cancel();
+    }
+    // 归还 timer 到池
+    if (timer_handle_)
+    {
+        GetCurrentThreadTimerPool()->Release(timer_handle_);
+        timer_handle_.reset();
+    }
 }
 
 } // namespace gb

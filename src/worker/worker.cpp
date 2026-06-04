@@ -70,14 +70,16 @@ void Worker::Run()
 
         // 帧率控制：等待剩余帧时间
         // cv notify_one（来自 EnqueueTask）提前唤醒以立即处理任务
+        // 注意：不再依赖 size_approx() 判断，因为它在高并发时不准确
+        // 提前唤醒后会在 ProcessFrame 中处理队列中的所有任务
         auto frame_time = std::chrono::steady_clock::now() - frame_start;
         auto remaining  = frame_duration_ - frame_time;
         if (remaining > std::chrono::milliseconds::zero())
         {
             std::unique_lock<std::mutex> lk(event_mutex_);
-            event_cv_.wait_for(lk, remaining, [this]() {
-                return !runing_.load() || events_.size_approx() > 0;
-            });
+            // 移除 size_approx() 检查，依赖 notify_one 提前唤醒
+            // 唤醒后会立即进入下一帧处理队列中的任务
+            event_cv_.wait_for(lk, remaining);
         }
     }
 }
