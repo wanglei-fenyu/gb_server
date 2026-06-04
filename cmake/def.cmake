@@ -56,10 +56,12 @@ message("CMAKE_CXX_COMPILER_VERSION: ${CMAKE_CXX_COMPILER_VERSION}")
 message("CMAKE_CONFIGURATION_TYPES: ${CMAKE_CONFIGURATION_TYPES}")
 
 if(MSVC)
-    # MSVC 编译选项，无论使用 Visual Studio 还是 Ninja 生成器都会生效
-    add_compile_options(/utf-8)
-    add_compile_options(/bigobj)
-    add_compile_options(/EHa)
+    # MSVC 默认添加 /EHsc，替换为 /EHa 而不是追加，避免 D9025 覆盖警告
+    string(REPLACE "/EHsc" "/EHa" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /utf-8 /bigobj")
+    # 第三方头文件（#include <>）的警告全部静音
+    add_compile_options(/external:anglebrackets /external:W0)
+    add_compile_definitions(_WIN32_WINNT=0x0601)
 endif()
 
 if(LINUX)

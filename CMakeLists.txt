@@ -1,18 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
+# 项目定义（必须在 def.cmake 之前，使 MSVC/WIN32/LINUX 变量生效）
+project(GBServer)
+list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/generators")
 # 包含自定义函数和配置
 include(cmake/base.cmake)
 include(cmake/def.cmake)
-list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/generators")
-# 项目定义
-project(GBServer)
-
-if(MSVC)
-    # def.cmake 中的 MSVC 标志在 project() 之前被引入，MSVC 变量尚未设置，
-    # 导致其中的 add_compile_options(/EHa) 被静默跳过。
-    # 详见: cmake/def.cmake 中 if(MSVC) 块。
-    add_compile_options(/EHa)
-endif()
 
 # 引入 Conan toolchain
 if(EXISTS ${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
@@ -41,6 +34,19 @@ find_package(sol2 REQUIRED)
 find_package(cxxopts REQUIRED)
 find_package(PostgreSQL REQUIRED)
 find_package(Catch2 REQUIRED)
+
+if(MSVC)
+    # MSVC 不接受 -fPIC（Conan 工具链可能开启）
+    set(CMAKE_POSITION_INDEPENDENT_CODE OFF)
+    # 从所有标志变量中彻底清除 -fPIC（覆盖 CMAKE_*_INIT / find_package 注入）
+    foreach(flags_var CMAKE_CXX_FLAGS CMAKE_C_FLAGS
+                      CMAKE_CXX_FLAGS_DEBUG CMAKE_C_FLAGS_DEBUG
+                      CMAKE_CXX_FLAGS_RELEASE CMAKE_C_FLAGS_RELEASE
+                      CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_C_FLAGS_MINSIZEREL
+                      CMAKE_CXX_FLAGS_RELWITHDEBINFO CMAKE_C_FLAGS_RELWITHDEBINFO)
+        string(REPLACE "-fPIC" "" ${flags_var} "${${flags_var}}")
+    endforeach()
+endif()
 
 # 定义全局编译宏
 add_compile_definitions(

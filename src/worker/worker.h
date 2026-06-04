@@ -109,8 +109,8 @@ private:
 	ScriptPtr	scriptPtr_;
 	WorkerType worker_type_;
     ServiceWorkerType service_type_{SWT_Normal};
-    uint32_t index_;
-    uint32_t thread_id_;	 
+    uint32_t index_ = 0;
+    uint32_t thread_id_ = 0;
 	moodycamel::ConcurrentQueue<std::function<void(void)>> events_;
     std::unique_ptr<TimerManager> timer_manager_;
 	std::atomic<bool> runing_ = false;

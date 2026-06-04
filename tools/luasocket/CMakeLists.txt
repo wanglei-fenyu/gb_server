@@ -8,7 +8,9 @@ find_package(lua REQUIRED)
 include_directories(${lua_INCLUDE_DIRS})
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_compile_options(-fPIC)
+if(UNIX)
+    add_compile_options(-fPIC)
+endif()
 add_compile_definitions(GB_LUASOCKET)
 
 # 平台特定文件

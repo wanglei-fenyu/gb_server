@@ -263,12 +263,14 @@ void Worker::InitLua()
 	std::string package_path = (*scriptPtr_)["package"]["path"];
 	package_path += ";" + script_path + "/?.lua";
 	(*scriptPtr_)["package"]["path"] = package_path;
-	auto result = scriptPtr_->safe_script_file(script_path + "/start_debug.lua");
-	if (!result.valid())
-	{
-		sol::error err = result;
-		LOG_ERROR("Start Lua Debug Fail {}", err.what());
-	}
+	scriptPtr_->safe_script_file(script_path + "/start_debug.lua", [](lua_State*, sol::protected_function_result pfr) {
+		if (!pfr.valid())
+		{
+			sol::error err = pfr;
+			LOG_ERROR("Start Lua Debug Fail {}", err.what());
+		}
+		return pfr;
+	});
 
 	std::string scriptRootPath = ResPath::Instance()->FindResPath("../script/main.lua");
 	scriptPtr_->Load(scriptRootPath);

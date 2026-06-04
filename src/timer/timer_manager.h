@@ -51,7 +51,7 @@ private :
     std::priority_queue<SystemTimer*, std::pmr::vector<SystemTimer*>, SystemCompare> system_timers_{};
 
     std::pmr::unordered_map<int64_t, std::unique_ptr<Timer>> all_timers_{};
-	int64_t generate_timer_id_;
+	int64_t generate_timer_id_ = 0;
     std::atomic<bool> shutting_down_{false};
 };
 

@@ -5,6 +5,11 @@
 //
 #include <catch2/catch_test_macros.hpp>
 
+// Catch2 的 CHECK 与项目 log.h 的 CHECK 冲突，取消 Catch2 版本
+#ifdef CHECK
+#undef CHECK
+#endif
+
 #include "network/router/lock_free_route_table.h"
 #include "network/router/route_table.h"
 #include "network/router/router.h"

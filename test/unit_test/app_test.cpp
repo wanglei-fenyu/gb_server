@@ -1,15 +1,26 @@
 #include "app_test.h"
 #include "base/res_path.h"
 #include "async/thread_pool_scheduler.h"
+#include "network/rpc/executor.h"
 #include "msgpack/msgpack.hpp"
-#include <poll.h>
-#include <unistd.h>
-#include <sys/wait.h>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <iomanip>
+#include <mutex>
+#include <condition_variable>
 #include <sstream>
+
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#include <io.h>
+#include <conio.h>
+#else
+#include <poll.h>
+#include <unistd.h>
+#include <sys/wait.h>
+#endif
 
 const MsgpackTestCase TestApp::kMsgpackTests[] = {
     {"msgpack: int8 序列化反序列化"},
@@ -130,6 +141,7 @@ void TestApp::PrintMainMenu()
     printf("  [5] msgpack 测试      -- 进入 msgpack 二级菜单\n");
     printf("  [6] 路由测试           -- 进入路由二级菜单（实体路由/服务路由/RPC 序列号）\n");
     printf("  [7] msgpack 打解包演示 -- 打包/解包并显示二进制格式\n");
+    printf("  [8] 调度器测试       -- 进入调度器测试菜单\n");
     printf("  [q] 退出              -- 退出程序\n");
     printf("========================\n");
     printf("> ");
@@ -187,6 +199,10 @@ void TestApp::HandleMainCmd(char cmd)
 
     case '6':
         current_level_ = RouteMenu;
+        break;
+
+    case '8':
+        current_level_ = SchedulerMenu;
         break;
 
     case '7': {
@@ -349,10 +365,271 @@ void TestApp::RunSingleRouteTest(int index)
     fflush(stdout);
 }
 
+// ─── Scheduler Submenu ────────────────────────────────────────
+
+void TestApp::PrintSchedulerMenu()
+{
+    printf("\n======= 调度器测试用例 (%d) =======\n", kSchedulerTestCount);
+    for (int i = 0; i < kSchedulerTestCount; i++)
+    {
+        printf("  [%2d] %s\n", i + 1, kSchedulerTests[i].name);
+    }
+    printf("  [a] 运行全部\n");
+    printf("  [b] 返回主菜单\n");
+    printf("==================================\n");
+    printf("> ");
+    fflush(stdout);
+}
+
+void TestApp::HandleSchedulerCmd(char cmd)
+{
+    if (cmd == 'b' || cmd == 'B')
+    {
+        current_level_ = MainMenu;
+        menu_drawn_ = false;
+        return;
+    }
+
+    if (cmd == 'a' || cmd == 'A')
+    {
+        printf("  -> 运行全部调度器测试...\n");
+        fflush(stdout);
+        int passed = 0, failed = 0;
+
+        auto run = [&](const char* name, std::function<int()> fn) {
+            printf("  %s ... ", name);
+            fflush(stdout);
+            int r = fn();
+            if (r == 0) { printf("通过\n"); passed++; }
+            else        { printf("失败 (%d)\n", r); failed++; }
+            fflush(stdout);
+        };
+
+        run(kSchedulerTests[0].name, [this]() { return RunWorkerExecutorDispatchTest(); });
+        run(kSchedulerTests[1].name, [this]() { return RunWorkerExecutorMainTest(); });
+        run(kSchedulerTests[2].name, [this]() { return RunThreadPoolDispatchTest(); });
+        run(kSchedulerTests[3].name, [this]() { return RunThreadPoolPostTest(); });
+
+        printf("  -> %d passed, %d failed\n", passed, failed);
+        fflush(stdout);
+        menu_drawn_ = false;
+        return;
+    }
+
+    printf("  未知命令: '%c'\n", cmd);
+    menu_drawn_ = false;
+}
+
+void TestApp::RunSingleSchedulerTest(int index)
+{
+    if (index < 0 || index >= kSchedulerTestCount)
+    {
+        printf("  无效编号\n");
+        return;
+    }
+
+    printf("  -> 运行: %s\n", kSchedulerTests[index].name);
+    fflush(stdout);
+
+    std::function<int()> fns[] = {
+        [this]() { return RunWorkerExecutorDispatchTest(); },
+        [this]() { return RunWorkerExecutorMainTest(); },
+        [this]() { return RunThreadPoolDispatchTest(); },
+        [this]() { return RunThreadPoolPostTest(); },
+    };
+
+    int ret = fns[index]();
+    if (ret == 0)
+        printf("  -> 通过\n");
+    else
+        printf("  -> 失败 (exit=%d)\n", ret);
+    fflush(stdout);
+}
+
+// ── 调度器集成测试（需 Worker 上下文，在父进程中运行）──
+
+int TestApp::RunWorkerExecutorDispatchTest()
+{
+    auto worker = gb::WorkerManager::Instance()->GetWorker(1);
+    if (!worker)
+    {
+        printf("  Worker(1) not available\n");
+        return -1;
+    }
+
+    gb::WorkerExecutor exec(worker);
+    if (!exec.HasWorker())
+    {
+        printf("  HasWorker() 返回 false\n");
+        return -1;
+    }
+
+    std::atomic<int> result{0};
+    std::mutex       mtx;
+    std::condition_variable cv;
+    bool done = false;
+
+    bool ok = exec.Dispatch([&]() {
+        result.store(42);
+        {
+            std::lock_guard<std::mutex> lk(mtx);
+            done = true;
+        }
+        cv.notify_one();
+    });
+    if (!ok)
+    {
+        printf("  Dispatch 返回 false\n");
+        return -1;
+    }
+
+    {
+        std::unique_lock<std::mutex> lk(mtx);
+        if (!cv.wait_for(lk, std::chrono::seconds(3), [&done] { return done; }))
+        {
+            printf("  Wait timeout (result=%d)\n", result.load());
+            return -1;
+        }
+    }
+
+    if (result.load() != 42)
+    {
+        printf("  Expected 42, got %d\n", result.load());
+        return -1;
+    }
+    return 0;
+}
+
+int TestApp::RunWorkerExecutorMainTest()
+{
+    auto exec = gb::WorkerExecutor::Main();
+    // 在主线程上调用时，IsCurrent() 为 true → 同步 inline 执行
+
+    int result = 0;
+    bool ok = exec.Dispatch([&]() {
+        result = 100;
+    });
+    if (!ok)
+    {
+        printf("  Dispatch 返回 false\n");
+        return -1;
+    }
+
+    if (result != 100)
+    {
+        printf("  Expected 100, got %d\n", result);
+        return -1;
+    }
+    return 0;
+}
+
+/// 等待 main_worker 事件处理完毕（用于 ThreadPoolScheduler 回调回投到 main_worker 的等待）
+static int WaitForMainWorker(std::atomic<bool>& done, int timeout_ms = 3000)
+{
+    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
+    auto deadline    = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    while (!done.load() && std::chrono::steady_clock::now() < deadline)
+    {
+        // 手动 drain main_worker 事件队列（回投的 TP 回调就在这里）
+        std::function<void()> task;
+        if (main_worker && main_worker->TryDequeueEvent(task))
+        {
+            if (task) task();
+        }
+        else
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    return done.load() ? 0 : -1;
+}
+
+int TestApp::RunThreadPoolDispatchTest()
+{
+    std::atomic<int>  result{0};
+    std::atomic<bool> done{false};
+
+    gb::ThreadPoolScheduler::Instance()->Dispatch<int>(
+        []() { return 42; },
+        [&](int r) {
+            result.store(r);
+            done.store(true);
+        }
+    );
+
+    if (WaitForMainWorker(done) != 0)
+    {
+        printf("  Timeout waiting for Dispatch callback (result=%d)\n", result.load());
+        return -1;
+    }
+
+    if (result.load() != 42)
+    {
+        printf("  Expected 42, got %d\n", result.load());
+        return -1;
+    }
+    return 0;
+}
+
+int TestApp::RunThreadPoolPostTest()
+{
+    std::atomic<bool> called{false};
+    std::atomic<bool> done{false};
+
+    gb::ThreadPoolScheduler::Instance()->Post([&]() {
+        called.store(true);
+        done.store(true);
+    });
+
+    if (WaitForMainWorker(done) != 0)
+    {
+        printf("  Timeout waiting for Post callback (called=%d)\n", called.load() ? 1 : 0);
+        return -1;
+    }
+
+    if (!called.load())
+    {
+        printf("  Post callback not executed\n");
+        return -1;
+    }
+    return 0;
+}
+
 // ─── Fork+Exec helpers ─────────────────────────────────────
 
 int TestApp::RunForkedTest(const char* filter)
 {
+#ifdef _WIN32
+    SetEnvironmentVariable("UNIT_TEST_HEADLESS", "1");
+
+    // Build UTF-8 command line, then convert to UTF-16 for CreateProcessW
+    // to avoid mojibake when passing Chinese filter strings through ANSI ACP
+    std::string cmdLineUtf8 = "\"" + exe_path_ + "\"";
+    if (filter && filter[0])
+    {
+        cmdLineUtf8 += " \"" + std::string(filter) + "\"";
+    }
+
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, cmdLineUtf8.c_str(), -1, nullptr, 0);
+    std::wstring cmdLineW(wlen, L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, cmdLineUtf8.c_str(), -1, &cmdLineW[0], wlen);
+
+    STARTUPINFOW siW       = { sizeof(siW) };
+    PROCESS_INFORMATION pi = {};
+
+    if (CreateProcessW(nullptr, &cmdLineW[0], nullptr, nullptr,
+                       FALSE, 0, nullptr, nullptr, &siW, &pi))
+    {
+        WaitForSingleObject(pi.hProcess, INFINITE);
+        DWORD exitCode;
+        GetExitCodeProcess(pi.hProcess, &exitCode);
+        CloseHandle(pi.hProcess);
+        CloseHandle(pi.hThread);
+        return (int)exitCode;
+    }
+    printf("  -> CreateProcessW failed (%lu)\n", GetLastError());
+    return -1;
+#else
     pid_t pid = fork();
     if (pid == 0)
     {
@@ -371,6 +648,7 @@ int TestApp::RunForkedTest(const char* filter)
     }
     printf("  -> fork 失败\n");
     return -1;
+#endif
 }
 
 void TestApp::RunSingleMsgpackTest(int index)
@@ -397,9 +675,10 @@ void TestApp::PrintMenu()
 {
     switch (current_level_)
     {
-    case MainMenu:    PrintMainMenu();    break;
-    case MsgpackMenu: PrintMsgpackMenu(); break;
-    case RouteMenu:   PrintRouteMenu();  break;
+    case MainMenu:       PrintMainMenu();       break;
+    case MsgpackMenu:    PrintMsgpackMenu();    break;
+    case RouteMenu:      PrintRouteMenu();      break;
+    case SchedulerMenu:  PrintSchedulerMenu();  break;
     }
 }
 
@@ -407,9 +686,10 @@ void TestApp::HandleMenuCommand(char cmd)
 {
     switch (current_level_)
     {
-    case MainMenu:    HandleMainCmd(cmd);    break;
-    case MsgpackMenu: HandleMsgpackCmd(cmd); break;
-    case RouteMenu:   HandleRouteCmd(cmd);   break;
+    case MainMenu:       HandleMainCmd(cmd);       break;
+    case MsgpackMenu:    HandleMsgpackCmd(cmd);    break;
+    case RouteMenu:      HandleRouteCmd(cmd);      break;
+    case SchedulerMenu:  HandleSchedulerCmd(cmd);  break;
     }
 }
 
@@ -423,51 +703,68 @@ int TestApp::OnUpdate(float)
         menu_drawn_ = true;
     }
 
+    char buf[64];
+    int n = 0;
+
+#ifdef _WIN32
+    if (_kbhit())
+    {
+        n = _read(0, buf, sizeof(buf) - 1);
+    }
+#else
     struct pollfd pfd = {STDIN_FILENO, POLLIN, 0};
     if (poll(&pfd, 1, 0) > 0 && (pfd.revents & POLLIN))
     {
-        char buf[64];
-        ssize_t n = read(STDIN_FILENO, buf, sizeof(buf) - 1);
-        if (n > 0)
+        n = (int)read(STDIN_FILENO, buf, sizeof(buf) - 1);
+    }
+#endif
+
+    if (n > 0)
+    {
+        buf[n] = '\0';
+        for (int i = 0; i < n; i++)
         {
-            buf[n] = '\0';
-            for (ssize_t i = 0; i < n; i++)
+            char c = buf[i];
+            if (c == '\n' || c == '\r')
+                continue;
+
+            if ((current_level_ == MsgpackMenu || current_level_ == RouteMenu || current_level_ == SchedulerMenu) && c >= '0' && c <= '9')
             {
-                char c = buf[i];
-                if (c == '\n' || c == '\r')
-                    continue;
-
-                if ((current_level_ == MsgpackMenu || current_level_ == RouteMenu) && c >= '0' && c <= '9')
+                int num = 0;
+                while (i < n && buf[i] >= '0' && buf[i] <= '9')
                 {
-                    int num = 0;
-                    while (i < n && buf[i] >= '0' && buf[i] <= '9')
-                    {
-                        num = num * 10 + (buf[i] - '0');
-                        i++;
-                    }
-                    i--;
-                    if (current_level_ == MsgpackMenu && num >= 1 && num <= kMsgpackTestCount)
-                    {
-                        RunSingleMsgpackTest(num - 1);
-                        menu_drawn_ = false;
-                    }
-                    else if (current_level_ == RouteMenu && num >= 1 && num <= kRouteTestCount)
-                    {
-                        RunSingleRouteTest(num - 1);
-                        menu_drawn_ = false;
-                    }
-                    else
-                    {
-                        int max = (current_level_ == MsgpackMenu) ? kMsgpackTestCount : kRouteTestCount;
-                        printf("  无效编号: %d (1-%d)\n", num, max);
-                        fflush(stdout);
-                        menu_drawn_ = false;
-                    }
-                    continue;
+                    num = num * 10 + (buf[i] - '0');
+                    i++;
                 }
-
-                HandleMenuCommand(c);
+                i--;
+            if (current_level_ == MsgpackMenu && num >= 1 && num <= kMsgpackTestCount)
+            {
+                RunSingleMsgpackTest(num - 1);
+                menu_drawn_ = false;
             }
+            else if (current_level_ == RouteMenu && num >= 1 && num <= kRouteTestCount)
+            {
+                RunSingleRouteTest(num - 1);
+                menu_drawn_ = false;
+            }
+            else if (current_level_ == SchedulerMenu && num >= 1 && num <= kSchedulerTestCount)
+            {
+                RunSingleSchedulerTest(num - 1);
+                menu_drawn_ = false;
+            }
+            else
+            {
+                int max = (current_level_ == MsgpackMenu) ? kMsgpackTestCount
+                        : (current_level_ == RouteMenu) ? kRouteTestCount
+                        : kSchedulerTestCount;
+                printf("  无效编号: %d (1-%d)\n", num, max);
+                fflush(stdout);
+                menu_drawn_ = false;
+            }
+                continue;
+            }
+
+            HandleMenuCommand(c);
         }
     }
 

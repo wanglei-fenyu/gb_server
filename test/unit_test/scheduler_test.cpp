@@ -13,6 +13,11 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+// Catch2 的 CHECK 与项目 log.h 的 CHECK 冲突，取消 Catch2 版本
+#ifdef CHECK
+#undef CHECK
+#endif
+
 #include "async/thread_pool_scheduler.h"
 #include "async/thread_pool.h"
 #include "network/rpc/executor.h"
@@ -249,7 +254,7 @@ TEST_CASE("scheduler: ThreadPoolScheduler stat() 返回待处理数", "[schedule
     sched.Stop();
 }
 
-TEST_CASE("scheduler: Dispatch<T> 无 Worker 时回退 inline 执行", "[scheduler][scheduler]")
+TEST_CASE("scheduler: Dispatch<T> 无 Worker 时回退 inline 执行", "[scheduler][scheduler][noworker]")
 {
     ThreadPoolScheduler sched;
     sched.Init(2);
@@ -266,7 +271,7 @@ TEST_CASE("scheduler: Dispatch<T> 无 Worker 时回退 inline 执行", "[schedul
     sched.Stop();
 }
 
-TEST_CASE("scheduler: Dispatch<void> 无 Worker 时回退 inline", "[scheduler][scheduler]")
+TEST_CASE("scheduler: Dispatch<void> 无 Worker 时回退 inline", "[scheduler][scheduler][noworker]")
 {
     ThreadPoolScheduler sched;
     sched.Init(2);
@@ -445,7 +450,7 @@ TEST_CASE("scheduler: WorkerExecutor Main() 无 Worker 时回退到 dispatch", "
     REQUIRE(called);  // inline_fallback 兜底
 }
 
-TEST_CASE("scheduler: WorkerExecutor Current() 无 Worker 时为空", "[scheduler][executor]")
+TEST_CASE("scheduler: WorkerExecutor Current() 无 Worker 时为空", "[scheduler][executor][noworker]")
 {
     // 在 headless 模式下 GetCurWorker() 返回 nullptr
     auto exec = WorkerExecutor::Current();

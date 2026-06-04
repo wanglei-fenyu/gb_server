@@ -11,6 +11,7 @@
 #include <math.h>
 #include <chrono>
 #include <bitset>
+#include <type_traits>
 
 #include <sol/sol.hpp>
 #include "gbnet/common/def.h"
@@ -199,25 +200,14 @@ struct is_stack_proxy<sol::state> : public std::true_type
 {
 };
 
-template <typename T>
-struct has_pack
+template <typename T, typename = void>
+struct has_pack : std::false_type
 {
-private:
-    typedef char yes;
-    typedef struct
-    {
-        char a[2];
-    } no;
+};
 
-private:
-    template <typename T1>
-    static yes &has(decltype(&T1::pack));
-
-    template <typename T1>
-    static no &has(...);
-
-public:
-    static const bool value = sizeof(has<T>(nullptr)) == sizeof(yes);
+template <typename T>
+struct has_pack<T, std::void_t<decltype(&T::pack)>> : std::true_type
+{
 };
 
 template <typename T>
@@ -251,27 +241,23 @@ struct has_constchar<char (&)[N]> : public std::true_type
 };
 
 template <size_t Idx = 0, typename F, typename... Args>
-inline typename std::enable_if_t<Idx == sizeof...(Args)> for_each(std::tuple<Args...> &&, F)
+inline void for_each(std::tuple<Args...> &&tue, F &&f)
 {
+    if constexpr (Idx < sizeof...(Args))
+    {
+        f(std::get<Idx>(tue));
+        for_each<Idx + 1, F, Args...>(tue, std::move(f));
+    }
 }
 
 template <size_t Idx = 0, typename F, typename... Args>
-inline typename std::enable_if_t<Idx < sizeof...(Args)> for_each(std::tuple<Args...> &&tue, F &&f)
+inline void for_each(std::tuple<Args...> &tue, F &&f)
 {
-    f(std::get<Idx>(tue));
-    for_each<Idx + 1, F, Args...>(tue, std::move(f));
-}
-
-template <size_t Idx = 0, typename F, typename... Args>
-inline typename std::enable_if_t<Idx == sizeof...(Args)> for_each(std::tuple<Args...> &, F)
-{
-}
-
-template <size_t Idx = 0, typename F, typename... Args>
-inline typename std::enable_if_t<Idx < sizeof...(Args)> for_each(std::tuple<Args...> &tue, F &&f)
-{
-    f(std::get<Idx>(tue));
-    for_each<Idx + 1, F, Args...>(tue, std::move(f));
+    if constexpr (Idx < sizeof...(Args))
+    {
+        f(std::get<Idx>(tue));
+        for_each<Idx + 1, F, Args...>(tue, std::move(f));
+    }
 }
 
 class Packer
@@ -551,7 +537,7 @@ inline void Packer::pack_type(const int64_t &value)
 	else
 	{
 		serializedObj_.emplace_back((uint8_t)format_t::int64);
-		auto serialize_val = uint64_t(to_binary(value).to_ulong());
+		auto serialize_val = uint64_t(to_binary(value).to_ullong());
 		for (int i = sizeof(value); i > 0; --i)
 		{
 			serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
@@ -1424,7 +1410,7 @@ private:
                 std::bitset<32> bits;
                 for (auto i = sizeof(uint32_t); i > 0; --i) 
                 {
-                    bits |= uint32_t(safe_data()) << 8 * (i - 1);
+                    bits |= static_cast<unsigned long long>(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
                 if (bits[31]) {
@@ -1440,7 +1426,7 @@ private:
                 std::bitset<16> bits;
                 for (auto i = sizeof(uint16_t); i > 0; --i) 
                 {
-                    bits |= uint16_t(safe_data()) << 8 * (i - 1);
+                    bits |= static_cast<unsigned long long>(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
                 if (bits[15]) {
@@ -1584,7 +1570,7 @@ inline void Unpacker::unpack_type(std::string &value)
 		safe_incremen();
 		for (auto i = sizeof(uint32_t); i > 0; --i)
 		{
-			strSize += uint32_t(safe_data()) << 8 * (i - 1);
+			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
 	} else if (safe_data() == (uint8_t)format_t::str16) 
@@ -1592,7 +1578,7 @@ inline void Unpacker::unpack_type(std::string &value)
 		safe_incremen();
 		for (auto i = sizeof(uint16_t); i > 0; --i) 
 		{
-			strSize += uint16_t(safe_data()) << 8 * (i - 1);
+			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
 	} else if (safe_data() == (uint8_t)format_t::str8)
@@ -1600,7 +1586,7 @@ inline void Unpacker::unpack_type(std::string &value)
 		safe_incremen();
 		for (auto i = sizeof(uint8_t); i > 0; --i)
 		{
-			strSize += uint8_t(safe_data()) << 8 * (i - 1);
+			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
 	} else {
@@ -1625,7 +1611,7 @@ inline void Unpacker::unpack_type(std::vector<uint8_t> &value)
 		safe_incremen();
 		for (auto i = sizeof(uint32_t); i > 0; --i)
 		{
-			binSize += uint32_t(safe_data()) << 8 * (i - 1);
+			binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
 	}
@@ -1634,14 +1620,14 @@ inline void Unpacker::unpack_type(std::vector<uint8_t> &value)
 		safe_incremen();
 		for (auto i = sizeof(uint16_t); i > 0; --i) 
 		{
-			binSize += uint16_t(safe_data()) << 8 * (i - 1);
+			binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
 	} else 
 	{
 		safe_incremen();
 		for (auto i = sizeof(uint8_t); i > 0; --i) {
-			binSize += uint8_t(safe_data()) << 8 * (i - 1);
+			binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
 	}

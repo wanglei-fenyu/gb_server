@@ -10,6 +10,11 @@
 #include "base/res_path.h"
 #include "db/redis/register_redis.h"
 
+#ifdef _WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+#endif
+
 
 App::App(int argc, char* argv[])  : runding_(false), frame_duration_(std::chrono::milliseconds(16))
 {
@@ -31,6 +36,10 @@ void App::SetFrameRate(int fps)
 
 int App::Init()
 {
+#ifdef _WIN32
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+#endif
 	log.Init(ResPath::Instance()->FindResPath("log4/test.log").c_str(), 1024 * 1024 * 1000, 10,
              GbLog::ASYNC, GbLog::CONSOLE_AND_FILE, GbLog::LEVEL_INFO);
 
