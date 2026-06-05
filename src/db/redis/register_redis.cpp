@@ -278,7 +278,7 @@ public:
                  cb_ptr->valid() ? "yes" : "no",
                  ec ? ec.message() : "none",
                  static_cast<int>(val));
-        w->Post([cb_ptr, ec, val]() {
+        w->Post([cb_ptr, ec]() {
             LOG_INFO("[PostCbBool] lambda ON WORKER: cb_valid={}", cb_ptr->valid() ? "yes" : "no");
             if (cb_ptr->valid())
             {

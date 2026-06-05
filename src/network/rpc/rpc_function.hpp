@@ -50,10 +50,9 @@ template <typename F>
 rpc_listen_fun MakeRpcHandler(F f)
 {
 	using ArgsTuple = typename function_traits<std::decay_t<F>>::args_tuple;
-	constexpr std::size_t N = std::tuple_size_v<ArgsTuple>;
 
-	return [f,N](const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size) mutable -> void {
-		if constexpr (N == 0)
+	return [f](const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size) mutable -> void {
+		if constexpr (std::tuple_size_v<ArgsTuple> == 0)
 		{
 			f();
 		}
@@ -63,12 +62,12 @@ rpc_listen_fun MakeRpcHandler(F f)
 
 			if constexpr (std::is_same_v<P0, RpcReply>)
 			{
-				if constexpr (N == 1)
+				if constexpr (std::tuple_size_v<ArgsTuple> == 1)
 				{
 					// f(RpcReply)
 					f(RpcReply(std::move(meta), session));
 				}
-				else if constexpr (N == 2 && std::is_base_of_v<google::protobuf::Message, std::tuple_element_t<1, ArgsTuple>>)
+				else if constexpr (std::tuple_size_v<ArgsTuple> == 2 && std::is_base_of_v<google::protobuf::Message, std::tuple_element_t<1, ArgsTuple>>)
 				{
 					// f(RpcReply, ProtoMsg) — 从流中解析第二个参数
 					using P1 = std::tuple_element_t<1, ArgsTuple>;
@@ -90,7 +89,7 @@ rpc_listen_fun MakeRpcHandler(F f)
 						std::move(result));
 				}
 			}
-			else if constexpr (N == 1 && std::is_base_of_v<google::protobuf::Message, P0>)
+			else if constexpr (std::tuple_size_v<ArgsTuple> == 1 && std::is_base_of_v<google::protobuf::Message, P0>)
 			{
 				// f(ProtoMsg) — 单个protobuf参数
 				P0 p0;

@@ -178,9 +178,9 @@ static void register_msgpack(std::shared_ptr<Script>& scriptPtr)
 	using namespace gb::msgpack;
 	auto msgpack = scriptPtr->create_table("msgpack");
 	msgpack["pack"] = sol::overload(
-		[](sol::variadic_args args)->std::vector<uint8_t> {return std::move(pack(args)); },
+		[](sol::variadic_args args)->std::vector<uint8_t> {return pack(args); },
 		[](sol::variadic_args&& args)->std::vector<uint8_t> {return pack(std::forward<sol::variadic_args&&>(args)); },
-		[](sol::protected_function_result& args)->std::vector<uint8_t> {return std::move(pack(args)); }
+		[](sol::protected_function_result& args)->std::vector<uint8_t> {return pack(args); }
 		//[](sol::protected_function_result&& args)->std::vector<uint8_t> {return std::move(pack(std::move(args))); }
 	);
 	msgpack["unpack"] = sol::overload(

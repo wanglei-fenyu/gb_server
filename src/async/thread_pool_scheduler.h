@@ -12,7 +12,7 @@ namespace gb
 {
 
 template <typename T>
-class ThreadPoolAwaiter;
+struct ThreadPoolAwaiter;
 
 /// ThreadPoolScheduler —— 抢占式线程池的统一调度抽象。
 ///
