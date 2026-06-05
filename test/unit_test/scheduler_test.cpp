@@ -435,15 +435,11 @@ TEST_CASE("scheduler: WorkerExecutor Dispatch 空函数返回 false", "[schedule
     REQUIRE_FALSE(ok);
 }
 
-TEST_CASE("scheduler: WorkerExecutor Main() 无 Worker 时回退到 dispatch", "[scheduler][executor]")
+TEST_CASE("scheduler: WorkerExecutor 无 Worker 时 inline_fallback 兜底", "[scheduler][executor]")
 {
-    // 在 headless 模式下 GetMainWorker() 返回 nullptr
-    // → 构造 fallback dispatch 版本
-    auto exec = WorkerExecutor::Main();
-    // 此时没有 main worker，HasWorker() 为 false
-
-    // Dispatch 通过 dispatch_ 调用 PostToMain（main_worker_ 为空则返回 false）
-    // inline_fallback=true 会最后兜底
+    // 无 Worker 时 Dispatch 返回 false
+    auto exec = WorkerExecutor::Current();
+    REQUIRE_FALSE(exec.HasWorker());
     bool called = false;
     bool ok = exec.Dispatch([&]() { called = true; });
     REQUIRE(ok);

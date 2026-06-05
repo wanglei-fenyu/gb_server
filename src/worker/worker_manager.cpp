@@ -73,10 +73,9 @@ gb::WorkerPtr WorkerManager::GetWorker(size_t index) const
 {
     if (index == 0)
         return main_worker_;
-    if (index - 1 < workers.size())
-        return workers[index - 1];
-	return nullptr;
-
+    if (index > workers.size())
+        return nullptr;
+    return workers[index - 1];
 }
 
 gb::WorkerPtr WorkerManager::GetCurWorker() const

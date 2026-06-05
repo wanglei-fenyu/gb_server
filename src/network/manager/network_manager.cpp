@@ -137,11 +137,6 @@ void NetworkManager::UnRegister(std::string method)
 	rpc_interface_map_.erase(key);
 }
 
-WorkerExecutor NetworkManager::CreateExecutorForRoute(uint32_t type, uint64_t route_id) const
-{
-    return router_.GetServiceExecutor((MessageType)type, route_id);
-}
-
 net_listen_fun NetworkManager::FindListenFunction(uint32_t type)
 {
     // 快速路径：从冻结的只读映射读取——无锁
@@ -186,23 +181,10 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
     {
         case MsgMode::Msg:
         {
-            // ── 快速路径：entity_id != 0 且已在路由表中 → 直投所属 Worker ──
-            if (meta.entity_id != 0)
-            {
-                auto entity_executor = router_.GetEntityExecutor(meta.entity_id);
-                if (entity_executor.HasWorker())
-                {
-                    net_listen_fun listen_func = FindListenFunction(meta.type);
-                    if (!listen_func)
-                        return;
-                    entity_executor.Dispatch([session = session, buffer = buffer, meta = meta, meta_size, data_size, listen_func = std::move(listen_func)]() mutable {
-                        listen_func(session, buffer, meta, meta_size, data_size);
-                    });
-                    break;
-                }
-            }
-            // ── 回退路径：走旧 Router（MessageType % 10000 映射） ──
-            auto           executor    = CreateExecutorForRoute(meta.type, meta.entity_id);
+            // 统一路由入口：根据 ServerApp::SetRouterPolicy 设定的策略自动走对应路径
+            //   Stateful：entity_id 精确绑定，未命中则回退 hash
+            //   Stateless：纯 hash 路由
+            auto           executor    = router_.GetExecutor(meta.type, meta.entity_id);
             net_listen_fun listen_func = FindListenFunction(meta.type);
             if (!listen_func)
                 return;
@@ -213,23 +195,7 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         }
         case MsgMode::Request:
         {
-            // ── 快速路径：entity_id != 0 且在路由表中 → 直投所属 Worker ──
-            if (meta.entity_id != 0)
-            {
-                auto entity_executor = router_.GetEntityExecutor(meta.entity_id);
-                if (entity_executor.HasWorker())
-                {
-                    rpc_listen_fun rpc_func = FindRpcFunction(meta.method);
-                    if (!rpc_func)
-                        return;
-                    entity_executor.Dispatch([session = session, buffer = buffer, meta = meta, meta_size, data_size, rpc_func = std::move(rpc_func)]() mutable {
-                        rpc_func(session, buffer, meta, meta_size, data_size);
-                    });
-                    break;
-                }
-            }
-            // ── 回退路径：走旧 Router ──
-            auto           executor  = CreateExecutorForRoute(meta.type, meta.entity_id);
+            auto           executor  = router_.GetExecutor(meta.type, meta.entity_id);
             rpc_listen_fun rpc_func = FindRpcFunction(meta.method);
             if (!rpc_func)
                 return;
@@ -241,7 +207,6 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         case MsgMode::Response:
         {
             // 从64位sequence字段解码worker_index + local_seq
-            // IO线程从不访问共享映射——只解码和转发
             SequenceId sid;
             sid.value       = meta.sequence;
             uint32_t worker_index = sid.index;
@@ -255,8 +220,6 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
                 return;
             }
 
-            // 投递到所属Worker线程，通过其成员 pending_rpcs_ 查找调用
-            //（Worker端无锁）
             worker->Post([session, buffer, meta, meta_size, data_size, local_seq, worker]() mutable {
                 auto call = worker->TakePendingRpc(local_seq);
                 if (call)

@@ -67,7 +67,7 @@ const MsgpackTestCase TestApp::kMsgpackTests[] = {
 
 const MsgpackTestCase TestApp::kSchedulerTests[] = {
     {"WorkerExecutor 绑定 Worker(1) — Dispatch 投递"},
-    {"WorkerExecutor::Main() — 主线程分发"},
+    {"WorkerExecutor::Current() — 主线程分发"},
     {"ThreadPoolScheduler Dispatch<int> — Worker 上下文"},
     {"ThreadPoolScheduler Post — Worker 上下文"},
 };
@@ -87,9 +87,10 @@ const MsgpackTestCase TestApp::kRouteTests[] = {
     {"route: 自定义 resolver 映射消息类型"},
     {"route: RegisterWorker + GetWorker 一对一"},
     {"route: RegisterWorker 多 worker 注册"},
-    {"route: Router::GetEntityExecutor 未绑定返回无效"},
-    {"route: Router::GetServiceExecutor 未注册 worker 回退到 Main"},
-    {"route: Router::Bind→Freeze→GetEntityExecutor 验证路由表"},
+    {"route: Router::GetEntityExecutor 未绑定丢弃（Stateful）"},
+    {"route: Router::GetServiceExecutor entity_id==0 路由到 main_worker_"},
+    {"route: Router::GetExecutor(Stateful) entity_id==0 路由到 main_worker_"},
+    {"route: Router::Bind→Freeze→GetExecutor(Stateful) 验证路由表"},
     {"route: SequenceId 编解码往返"},
     {"route: SequenceId 零值"},
     {"route: SequenceId 边界值"},
@@ -502,7 +503,7 @@ int TestApp::RunWorkerExecutorDispatchTest()
 
 int TestApp::RunWorkerExecutorMainTest()
 {
-    auto exec = gb::WorkerExecutor::Main();
+    auto exec = gb::WorkerExecutor::Current();
     // 在主线程上调用时，IsCurrent() 为 true → 同步 inline 执行
 
     int result = 0;
@@ -526,20 +527,20 @@ int TestApp::RunWorkerExecutorMainTest()
 /// 等待 main_worker 事件处理完毕（用于 ThreadPoolScheduler 回调回投到 main_worker 的等待）
 static int WaitForMainWorker(std::atomic<bool>& done, int timeout_ms = 3000)
 {
-    auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
-    auto deadline    = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
     while (!done.load() && std::chrono::steady_clock::now() < deadline)
     {
-        // 手动 drain main_worker 事件队列（回投的 TP 回调就在这里）
-        std::function<void()> task;
-        if (main_worker && main_worker->TryDequeueEvent(task))
+        // ThreadPool Dispatch/Post 的回调通过 worker->Post() 投递到这里
+        auto main_worker = gb::WorkerManager::Instance()->GetMainWorker();
+        if (main_worker)
         {
-            if (task) task();
+            std::function<void()> task;
+            while (main_worker->TryDequeueEvent(task))
+            {
+                if (task) task();
+            }
         }
-        else
-        {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
-        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return done.load() ? 0 : -1;
 }

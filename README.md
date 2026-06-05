@@ -334,10 +334,14 @@ worker->Post([this]() {
 });
 
 // 通过 Router 获取 WorkerExecutor
-auto executor = router.GetEntityExecutor(entity_id);
+// 统一入口：根据 SetPolicy 选择 Stateful 或 Stateless 策略
+router.SetPolicy(Router::Policy::Stateful);   // Scene Server：entity_id 精确绑定
+router.SetPolicy(Router::Policy::Stateless); // Gateway Server：hash 路由
+
+auto executor = router.GetExecutor(/*type=*/0, entity_id);
 if (executor.HasWorker()) {
     executor.Dispatch([]() {
-        // 自动路由到所属 Worker
+        // 自动路由到对应 Worker
     });
 }
 ```
@@ -427,12 +431,14 @@ Client → TCP → Server::Impl → Listener → Session
             └─ NetworkManager::OnReceiveCall
                  └─ NetworkManager::Dispatch
                       ├─ MsgMode::Msg → 查 ListenFunction
-                      │   ├─ entity_id != 0 → GetEntityExecutor → 直投所属 Worker
-                      │   └─ 回退 → CreateExecutorForRoute → Router → Worker
+                      │       → GetExecutor(type, entity_id)
+                      │          ├─ Stateful：entity_id 精确绑定，未命中则回退 hash
+                      │          └─ Stateless：纯 hash
                       │
                       ├─ MsgMode::Request → 查 RpcFunction
-                      │   ├─ entity_id != 0 → GetEntityExecutor → 直投所属 Worker
-                      │   └─ 回退 → CreateExecutorForRoute → Router → Worker
+                      │       → GetExecutor(type, entity_id)
+                      │          ├─ Stateful：entity_id 精确绑定，未命中则回退 hash
+                      │          └─ Stateless：纯 hash
                       │
                       └─ MsgMode::Response → 从 sequence 解码 WorkerIndex
                                               → Worker::Post → TakePendingRpc
@@ -449,29 +455,37 @@ gb_server 有两种核心路由机制 + HTTP 独立路由：
 
 | 路由类型 | 路由依据 | 路由目标 | 调度方式 |
 |---|---|---|---|
-| **实体路由**（快速路径） | `meta.entity_id` (uint64) | 二分查找 → 所属 Worker | `Router::GetEntityExecutor` |
-| **服务路由**（回退路径） | `meta.type` → `ServiceWorkerType` | 按 `route_id` 轮询 Worker | `Router::GetServiceExecutor` |
+| **统一路由** | `Router::Policy` 决定 | Stateful：entity_id 精确绑定；Stateless：hash 路由 | `Router::GetExecutor(type, entity_id)` |
 | **RPC 响应** | `meta.sequence` (WorkerIndex) | 解码直投指定 Worker | 不经过 Router |
 | **HTTP 请求** | URL path + HTTP method | 匹配 RouteEntry handler | 线性遍历 routes vector |
 
-## 实体路由（Entity Routing）— 主要路径
+## Router 策略路由（统一入口）
 
-实体路由是**主要路由路径**，通过 `entity_id` 直接定位所属 Worker。
+`Router` 通过 `Policy` 选择路由策略，两类服务器各取所需：
 
 ```
-  meta.entity_id != 0
-       │
-       ▼
-  LockFreeRouteTable::Lookup(entity_id)
-       │  双缓冲 + 排序向量 + 二分查找
-       │  读端无锁（atomic load），写端主线程独占
-       ▼
-  找到 → WorkerExecutor::Dispatch → Worker::Post → Worker::ProcessFrame
-       │
-       └─ 未找到 → 回退到服务路由
-```
+┌─ Policy::Stateful（Scene Server） ────────────────────────────────────┐
+│  meta.entity_id != 0                                                 │
+│       │                                                              │
+│       ▼                                                              │
+│  LockFreeRouteTable::Lookup(entity_id)                              │
+│       │  双缓冲 + 排序向量 + 二分查找，读端无锁                        │
+│       ▼                                                              │
+│  命中 → WorkerExecutor::Dispatch → Worker::Post                      │
+│       │                                                              │
+│       └─ 未命中 → 回退到 hash 路由（新建 entity 时）                   │
+└──────────────────────────────────────────────────────────────────────┘
 
-### LockFreeRouteTable
+┌─ Policy::Stateless（Gateway Server） ─────────────────────────────────┐
+│  meta.entity_id 作为 route_id                                         │
+│       │                                                              │
+│       ▼                                                              │
+│  ServiceWorkerType 分类 → workers[hash(route_id) % N]                │
+│       │                                                              │
+│       ▼                                                              │
+│  WorkerExecutor::Dispatch → Worker::Post                              │
+└──────────────────────────────────────────────────────────────────────┘
+```
 
 ```
 ┌─ 写端（主线程独占） ──────────────────────────┐
@@ -492,33 +506,37 @@ gb_server 有两种核心路由机制 + HTTP 独立路由：
 ```
 
 ```cpp
-// 实体路由 API
-router.BindEntity(entity_begin, entity_end, worker_index);  // 绑定区间
-router.UnbindEntity(entity_id);                              // 解绑
-auto executor = router.GetEntityExecutor(entity_id);         // 查找
+// 统一 API
+router.SetPolicy(Router::Policy::Stateful);   // Scene Server
+router.SetPolicy(Router::Policy::Stateless);  // Gateway Server（默认）
+
+router.BindEntity(entity_begin, entity_end, worker_index);  // 仅 Stateful
+router.UnbindEntity(entity_id);                              // 仅 Stateful
+
+// 查找：统一入口，内部根据 Policy 自动走对应路径
+auto executor = router.GetExecutor(/*type=*/0, entity_id);
 if (executor.HasWorker()) {
-    // 直投所属 Worker
+    executor.Dispatch([]() { /* 直投对应 Worker */ });
 }
 ```
 
-### 实体路由与服务路由的配合
+### Stateful 与 Stateless 的配合
 
 ```
 NetworkManager::Dispatch()
   │
   ├─ Msg / Request 模式:
-  │   ├─ meta.entity_id != 0 且 LockFreeRouteTable 命中
-  │   │   → 实体路由（快速路径）
-  │   └─ 否则
-  │       → 服务路由（回退路径）
+  │       → GetExecutor(type, entity_id)
+  │          ├─ Stateful：  精确绑定，未命中则回退 hash
+  │          └─ Stateless： 纯 hash
   │
   └─ Response 模式:
       → 从 sequence 解码 WorkerIndex，直投（不经过 Router）
 ```
 
-## 服务路由（Service Routing）— 回退路径
+## ServiceWorkerType 分类（两种策略共享）
 
-服务路由通过 `MessageType → ServiceWorkerType` 映射确定目标 Worker 类型，再按 `route_id` 轮询选择 Worker。
+ServiceWorkerType 将 Worker 按职责分组，Stateless 路由和 Stateful 回退都依赖它：
 
 ```
   meta.type → ResolveServiceWorkerType(MessageType)
@@ -710,8 +728,9 @@ co_await CoRpc<void>::execute(
 │  NetworkManager::Dispatch()                              │
 │    meta.mode == Request                                  │
 │    1. FindRpcFunction(meta.method) 查处理器              │
-│    2. entity_id != 0 → GetEntityExecutor → Worker        │
-│       回退 → CreateExecutorForRoute → Router → Worker   │
+│    2. GetExecutor(meta.type, meta.entity_id)             │
+│       ├─ Stateful：entity_id 精确绑定，未命中回退 hash   │
+│       └─ Stateless：纯 hash                              │
 │    3. Worker 执行处理器, reply.Invoke(data)              │
 │       └─ 发送 Response 回调用端                          │
 └─────────────────────────────────────────────────────────┘

@@ -61,7 +61,7 @@ private:
 
     static constexpr int kMsgpackTestCount = 40;
     static const MsgpackTestCase kMsgpackTests[kMsgpackTestCount];
-    static constexpr int kRouteTestCount = 23;
+    static constexpr int kRouteTestCount = 24;
     static const MsgpackTestCase kRouteTests[kRouteTestCount];
     static constexpr int kSchedulerTestCount = 4;
     static const MsgpackTestCase kSchedulerTests[kSchedulerTestCount];

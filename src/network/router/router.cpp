@@ -54,45 +54,63 @@ namespace gb
         return workers[index];
     }
 
-	WorkerExecutor Router::GetServiceExecutor(MessageType message_type, uint64 route_id) const
+	WorkerExecutor Router::GetServiceExecutor(MessageType message_type, uint64_t route_id) const
 	{
-        auto workers = route_table_.GetWorker(route_table_.ResolveServiceWorkerType(message_type));
-        auto target  = PickWorker(workers, message_type, route_id).lock();
-        if (!target)
-        {
-            auto main_worker = WorkerManager::Instance()->GetMainWorker();
-            if (main_worker)
-            {
-                auto executor = main_worker->GetExecutor();
-                if (executor)
-                    return *executor;
-                return WorkerExecutor::Worker(main_worker);
-            }
-            return WorkerExecutor::Main();
-        }
-        auto executor = target->GetExecutor();
-        if (!executor)
-            return WorkerExecutor::Worker(target);
-        return *executor;
+		return GetExecutor(static_cast<uint32_t>(message_type), route_id);
+	}
+
+	WorkerExecutor Router::GetExecutor(uint32_t message_type, uint64_t entity_id) const
+	{
+		// entity_id == 0：系统消息（etcd 等）→ 主线程 Worker
+		if (entity_id == 0)
+		{
+			auto main_worker = WorkerManager::Instance()->GetMainWorker();
+			if (main_worker)
+			{
+				auto executor = main_worker->GetExecutor();
+				if (executor)
+					return *executor;
+				return WorkerExecutor::Worker(main_worker);
+			}
+			return {};
+		}
+
+		if (policy_ == Policy::Stateful)
+		{
+			// 精确绑定查找，未命中 → 丢弃
+			uint32_t worker_index = entity_route_table_.Lookup(entity_id);
+			if (worker_index != LockFreeRouteTable::kInvalidWorker)
+			{
+				auto worker = WorkerManager::Instance()->GetWorker(worker_index);
+				if (worker)
+				{
+					auto executor = worker->GetExecutor();
+					if (executor)
+						return *executor;
+					return WorkerExecutor::Worker(worker);
+				}
+				// worker 已析构：丢弃
+				return {};
+			}
+			return {};
+		}
+
+		// Policy::Stateless：纯 hash 路由
+		auto workers = route_table_.GetWorker(route_table_.ResolveServiceWorkerType((MessageType)message_type));
+		if (workers.empty())
+			return {};
+
+		auto target = PickWorker(workers, (MessageType)message_type, entity_id).lock();
+		if (!target)
+			return {};
+
+		auto executor = target->GetExecutor();
+		if (executor)
+			return *executor;
+		return WorkerExecutor::Worker(target);
 	}
 
     // ── 实体路由 ──────────────────────────────────────────────────
-
-    WorkerExecutor Router::GetEntityExecutor(uint64_t entity_id) const
-    {
-        uint32_t worker_index = entity_route_table_.Lookup(entity_id);
-        if (worker_index == LockFreeRouteTable::kInvalidWorker)
-            return {};  // 无效 executor（HasWorker() == false）
-
-        auto worker = WorkerManager::Instance()->GetWorker(worker_index);
-        if (!worker)
-            return {};
-
-        auto executor = worker->GetExecutor();
-        if (executor)
-            return *executor;
-        return WorkerExecutor::Worker(worker);
-    }
 
     void Router::BindEntity(uint64_t entity_begin, uint64_t entity_end, uint32_t worker_index)
     {

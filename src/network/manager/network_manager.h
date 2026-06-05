@@ -115,7 +115,6 @@ public:
     void Freeze();
 
 private:
-    WorkerExecutor      CreateExecutorForRoute(uint32_t type, uint64_t route_id) const;
     net_listen_fun FindListenFunction(uint32_t type);
     rpc_listen_fun FindRpcFunction(uint64_t method);
 

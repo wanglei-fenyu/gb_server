@@ -92,7 +92,7 @@ public:
     /// 获取待处理任务数
     size_t GetPendingTaskCount() const { return events_.size_approx(); }
 
-    /// 尝试从事件队列取一个任务（被 App::ProcessMainThreadEvents 用来 drain main_worker 的事件）
+    /// 尝试从事件队列取一个任务（被 App::ProcessMainThreadEvents / WaitForMainWorker 用来 drain main_worker 的事件）
     bool TryDequeueEvent(std::function<void(void)>& task) { return events_.try_dequeue(task); }
 
 public:

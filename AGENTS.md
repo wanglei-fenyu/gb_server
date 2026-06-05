@@ -439,12 +439,16 @@ Client → TCP → ServerImpl → Listener → Session
             └─ NetworkManager::OnReceiveCall
                  └─ NetworkManager::Dispatch
                       ├─ MsgMode::Msg      → FindListenFunction(type)
-                      │                       → CreateExecutorForRoute(type, id)
+                      │                       → GetExecutor(type, id)
+                      │                          ├─ Stateful：entity_id 精确绑定，未命中回退 hash
+                      │                          └─ Stateless：纯 hash
                       │                       → WorkerExecutor::Dispatch → Worker::Post
                       │
                       ├─ MsgMode::Request   → FindRpcFunction(method)
-                      │                        → CreateExecutorForRoute(type, id)
-                      │                        → WorkerExecutor::Dispatch → Worker::Post
+                      │                       → GetExecutor(type, id)
+                      │                          ├─ Stateful：entity_id 精确绑定，未命中回退 hash
+                      │                          └─ Stateless：纯 hash
+                      │                       → WorkerExecutor::Dispatch → Worker::Post
                       │
                       └─ MsgMode::Response  → WorkerIndex/LocalSeq从sequence解码
                                               → Worker::Post → TakePendingRpc(local_seq)

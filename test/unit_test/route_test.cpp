@@ -202,44 +202,55 @@ TEST_CASE("route: RegisterWorker 多 worker 注册", "[route][routetable]")
 // Router — 实体路由 + 服务路由调度
 // ============================================================
 
-TEST_CASE("route: Router::GetEntityExecutor 未绑定返回无效", "[route][router]")
+TEST_CASE("route: Router::GetEntityExecutor 未绑定丢弃（Stateful）", "[route][router]")
 {
     Router router;
+    router.SetPolicy(Router::Policy::Stateful);
 
-    auto exec = router.GetEntityExecutor(42);
+    // Stateful + 未绑定 + 无 workers → hash 返回空 executor（丢弃）
+    auto exec = router.GetExecutor(/*type=*/0, /*entity_id=*/42);
     REQUIRE(exec.HasWorker() == false);
 
-    // 用不存在的 worker index（9999）确保 parent/child 行为一致
+    // 绑定到不存在的 worker index（9999）→ worker 不存在，丢弃
     router.BindEntity(10, 20, 9999);
     router.FreezeEntityRoutes();
-    exec = router.GetEntityExecutor(15);
+    exec = router.GetExecutor(/*type=*/0, /*entity_id=*/15);
     REQUIRE(exec.HasWorker() == false);
     REQUIRE(router.GetEntityRouteTable().Lookup(15) == 9999);
 }
 
-TEST_CASE("route: Router::GetServiceExecutor 未注册 worker 回退到 Main", "[route][router]")
+TEST_CASE("route: Router::GetServiceExecutor entity_id==0 路由到 main_worker_", "[route][router]")
 {
     Router router;
-    // 不注册 worker → GetServiceExecutor 内部回退到 Main Worker
-    REQUIRE_NOTHROW(router.GetServiceExecutor(MT_Login, 0));
+    // entity_id == 0：系统消息 → main_worker_（即使没有注册任何 Worker）
+    auto exec = router.GetServiceExecutor(MT_Login, 0);
+    REQUIRE(exec.HasWorker() == true);
 }
 
-TEST_CASE("route: Router::Bind→Freeze→GetEntityExecutor 验证路由表", "[route][router]")
+TEST_CASE("route: Router::GetExecutor(Stateful) entity_id==0 路由到 main_worker_", "[route][router]")
 {
     Router router;
+    router.SetPolicy(Router::Policy::Stateful);
+    // Stateful 下 entity_id == 0 也走 main_worker_
+    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/0).HasWorker() == true);
+}
 
-    // 用不存在的 worker index（99/88）确保 parent/child 行为一致
+TEST_CASE("route: Router::Bind→Freeze→GetExecutor(Stateful) 验证路由表", "[route][router]")
+{
+    Router router;
+    router.SetPolicy(Router::Policy::Stateful);
+
     router.BindEntity(100, 200, 99);
     router.BindEntity(300, 400, 88);
     router.FreezeEntityRoutes();
 
-    // 未绑定的 entity → 无效
-    REQUIRE(router.GetEntityExecutor(250).HasWorker() == false);
-    REQUIRE(router.GetEntityExecutor(500).HasWorker() == false);
+    // 未绑定的 entity → 无 workers，丢弃
+    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/250).HasWorker() == false);
+    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/500).HasWorker() == false);
 
-    // 已绑定但 worker index 99/88 不存在 → 无效
-    REQUIRE(router.GetEntityExecutor(150).HasWorker() == false);
-    REQUIRE(router.GetEntityExecutor(350).HasWorker() == false);
+    // 已绑定但 worker index 99/88 不存在 → 丢弃
+    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/150).HasWorker() == false);
+    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/350).HasWorker() == false);
 
     // 验证路由表内容正确（不经过 WorkerManager）
     const auto& tbl = router.GetEntityRouteTable();
