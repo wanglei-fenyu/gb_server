@@ -33,7 +33,11 @@ void SendRpc(std::shared_ptr<gb::Client> client)
 {
 	gb::RpcCallPtr call = std::make_shared<gb::RpcCall>();
 	call->SetSession(client->GetSession(gb::CONNECT_TYPE::CT_GATEWAY));
-	call->SetCallBack([](int a,std::string str) {
+	call->SetCallBack([](gb::RpcErrorCode err, int a, std::string str) {
+		if (err != gb::RpcErrorCode::None) {
+			LOG_ERROR("RPC failed: {}", static_cast<int>(err));
+			return;
+		}
 		LOG_INFO("test lua reply: {} {}",a, str);
 	});
     gb::NetworkManager::Instance()->Call(call, "test_ret_args", 2, "asadsadsadsdaefasgajf中国人大大撒大苏打 ddbgasufgsajbasadsadsadsdaefasgajf中国人大大撒大苏打 ddbgasufgsajbfasvfafasvfa");

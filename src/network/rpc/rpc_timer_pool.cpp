@@ -15,13 +15,10 @@ RpcTimerPool::TimerHandlePtr RpcTimerPool::Acquire(IoService& ios)
 {
     TimerHandlePtr handle;
 
+    if (!available_.empty())
     {
-        std::lock_guard<std::mutex> lock(mutex_);
-        if (!available_.empty())
-        {
-            handle = std::move(available_.back());
-            available_.pop_back();
-        }
+        handle = std::move(available_.back());
+        available_.pop_back();
     }
 
     if (!handle)
@@ -55,10 +52,7 @@ void RpcTimerPool::Release(TimerHandlePtr handle)
     // 取消 timer
     handle->timer.cancel();
 
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        available_.push_back(std::move(handle));
-    }
+    available_.push_back(std::move(handle));
 
     in_use_.fetch_sub(1, std::memory_order_relaxed);
 }
@@ -68,7 +62,6 @@ void RpcTimerPool::PreWarm(IoService& ios, size_t count)
     for (size_t i = 0; i < count; ++i)
     {
         auto handle = std::make_shared<TimerHandle>(ios, next_id_++);
-        std::lock_guard<std::mutex> lock(mutex_);
         available_.push_back(std::move(handle));
     }
     pool_size_.fetch_add(count, std::memory_order_relaxed);

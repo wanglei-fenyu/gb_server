@@ -55,11 +55,11 @@ public:
 
 	virtual void Dispatch(const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size);
 
-	void CallImpl(RpcCallPtr call, std::string method, sol::variadic_args& args);
+	void CallImpl(RpcCallPtr call, std::string method, uint64_t id, sol::variadic_args& args);
 	void CallImpl(gb::Meta& meta, RpcCallPtr call, const ReadBufferPtr buffer = nullptr);
 
 	template<typename ...Args>
-	void Call(RpcCallPtr call, std::string method, Args&&... args)
+	void Call(RpcCallPtr call, std::string method, uint64_t id = 0, Args&&... args)
 	{
 		if (!call)
 			return;
@@ -67,6 +67,7 @@ public:
 		uint64_t method_key = MD5::MD5Hash64(method.c_str());
 		meta.method = method_key;
 		meta.mode = MsgMode::Request;
+		meta.entity_id = id;
 		// sequence和call->SetId在CallImpl(Meta&, RpcCallPtr, ReadBufferPtr)内部处理
 		// 用于将worker_index + local_seq编码到64位sequence字段中
 		if constexpr (sizeof...(args) > 0)
@@ -114,7 +115,7 @@ public:
     /// 调用Freeze()后，FindListenFunction和FindRpcFunction变为无锁
     void Freeze();
 
-private:
+public:
     net_listen_fun FindListenFunction(uint32_t type);
     rpc_listen_fun FindRpcFunction(uint64_t method);
 

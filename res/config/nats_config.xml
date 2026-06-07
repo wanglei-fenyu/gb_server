@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+    <!-- NATS 连接配置 -->
+    <nats>
+        <!-- 服务地址，支持 nats:// 或 tls:// -->
+        <url>nats://127.0.0.1:4222</url>
+
+        <!-- 可选：认证 -->
+        <!-- <user>admin</user> -->
+        <!-- <password>changeme</password> -->
+
+        <!-- 连接选项 -->
+        <connect_timeout_ms>5000</connect_timeout_ms>
+        <reconnect_wait_ms>2000</reconnect_wait_ms>
+        <max_reconnect_attempts>60</max_reconnect_attempts>
+        <ping_interval_sec>30</ping_interval_sec>
+
+        <!-- 订阅配置 -->
+        <!-- 格式: <sub subject="xxx" queue="yyy" /> -->
+        <!-- queue 为可选的 queue group -->
+        <!-- 具体的 subject 和解析规则在 Lua 或 C++ 初始化时传入 -->
+    </nats>
+
+    <!--
+    使用示例（在 Lua 中）：
+
+    -- 连接
+    nats.Connect("nats://127.0.0.1:4222")
+
+    -- 定义 subject 解析器
+    local function parse_subject(subject, data)
+        local parts = {}
+        for part in string.gmatch(subject, "[^.]+") do
+            table.insert(parts, part)
+        end
+        local meta = {}
+        meta.mode = 0           -- Msg
+        meta.entity_id = tonumber(parts[2]) or 0
+        meta.type = tonumber(parts[3]) or 0
+        meta.method = 0
+        meta.sequence = 0
+        meta.compress_type = 0
+        return true, meta, data  -- true=处理, data=body bytes
+    end
+
+    -- 订阅（用解析器）
+    nats.Subscribe("scene.*", parse_subject, function(meta, body)
+        log.Info("NATS msg: type=" .. meta.type .. " entity=" .. meta.entity_id)
+    end)
+
+    -- 发布
+    local meta_bytes = nats.BuildMeta({mode=0, entity_id=12345, type=1, method=0, sequence=0, compress_type=0})
+    local body = msgpack.pack("hello")
+    nats.Publish("scene.12345.1", meta_bytes .. body)
+
+    -- Request（回调）
+    nats.Request("scene.12345.rpc", req_data, function(response)
+        log.Info("got response: " .. #response .. " bytes")
+    end, 5000)
+
+    -- Request/Reply 服务（自动回复）
+    nats.SubscribeRequest("scene.12345.rpc", function(request_data)
+        log.Info("got request: " .. #request_data .. " bytes")
+        return "response data"
+    end)
+    -->
+</root>

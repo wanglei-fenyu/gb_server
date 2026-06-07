@@ -41,6 +41,7 @@ macro(conan_link_libraries target_name)
         sol2::sol2
         cxxopts::cxxopts
         PostgreSQL::PostgreSQL
+        cnats::nats_static
     )
 
 

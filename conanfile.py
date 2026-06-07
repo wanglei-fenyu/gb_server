@@ -29,4 +29,5 @@ class GBServer(ConanFile):
         self.requires("cxxopts/3.3.1")
         self.requires("libpq/17.7")
         self.requires("catch2/3.15.0")
+        self.requires("cnats/3.12.0")
 

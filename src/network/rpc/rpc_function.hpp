@@ -10,6 +10,7 @@
 #include "msgpack/msgpack.hpp"
 #include <gbnet/buffer/compressed_stream.h>
 #include "rpc_function_help.h"
+#include "register_rpc.h"
 
 namespace gb
 {
@@ -131,14 +132,17 @@ struct RpcFunctionaTraits<sol::function, sol::function>
 {
 	static rpc_listen_fun make(sol::state* state, sol::function func)
 	{
-		return [state, func](const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size) -> void {
-			int         top = lua_gettop(state->lua_state());
-			std::string s   = "";
-			GetMsgData(meta, buffer, meta_size, data_size, s);
-			RpcReply reply(std::move(meta), session);
-			if (data_size > 0)
-			{
-				sol::variadic_args               arg = gb::msgpack::unpack(*state, (uint8_t*)s.data(), s.size());
+        sol::function main_func = BridgeCallback(std::move(func));
+        lua_State*    lstate    = main_func.lua_state();
+        return [lstate, func = std::move(main_func)](const SessionPtr& session, const ReadBufferPtr& buffer, gb::Meta& meta, int meta_size, int64_t data_size) -> void {
+            int         top = lua_gettop(lstate);
+            std::string s   = "";
+            GetMsgData(meta, buffer, meta_size, data_size, s);
+            RpcReply reply(std::move(meta), session);
+            sol::state_view lua_view(lstate);
+            if (data_size > 0)
+            {
+                sol::variadic_args               arg = gb::msgpack::unpack(lua_view, (uint8_t*)s.data(), s.size());
 				sol::protected_function_result result = func(reply, arg);
 				if (!result.valid())
 				{
@@ -153,7 +157,7 @@ struct RpcFunctionaTraits<sol::function, sol::function>
 					OnScriptError(result);
 				}
 			}
-			lua_settop(state->lua_state(), top);
+			lua_settop(lstate, top);
 		};
 	}
 };

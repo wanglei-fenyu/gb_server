@@ -8,8 +8,8 @@ local function test_rpc()
     call:SetCallBack(call_bcak)
     --net.Call(call,"lua_rpc_test_args","hello")
    -- net.Call(call, "lua_rpc_test")
-    net.Call(call, "square",20)
-    net.Call(call,"lua_rpc_test_args","world ")
+    net.Call(call, "square", 0, 20)
+    net.Call(call, "lua_rpc_test_args", 0, "world ")
 end
 
 

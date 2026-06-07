@@ -7,6 +7,7 @@
 #include "network/io/message_meta.h"
 #include <filesystem>
 #include "gbnet/buffer/compressed_def.h"
+#include "network/rpc/register_rpc.h"
 using namespace gb;
 
 
@@ -66,37 +67,53 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
 
 	network["Listen"]	= [](uint32_t type, sol::function  f,std::string protoName = "") {  gb::NetworkManager::Instance()->Listen(type, f, protoName); };
 	network["UnListen"] = [](uint32_t type,  std::string signal, int level = 0) { gb::NetworkManager::Instance()->UnListen(type, signal, level); };
-    network["Send"]     = sol::overload([](Session* session, uint32_t type, uint64_t id, std::string protoName, sol::object lua_msg) {
-											google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
-											if (messgae)
-											{
+    network["Send"]     = sol::overload([](Session* session, uint32_t type, uint64_t id, sol::object lua_msg) {
+                                            google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
+                                            if (messgae)
+                                            {
                                                 gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
-											}
-										},
-                                    [](std::shared_ptr<Session> session, uint32_t type, uint64_t id, std::string protoName, sol::object lua_msg) {
+                                            }
+                                        },
+                                    [](std::shared_ptr<Session> session, uint32_t type, uint64_t id, sol::object lua_msg) {
                                         google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
-											if (messgae)
-											{
-												gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
-											}
-										});
-    network["Register"] = [](std::string method, sol::function f) {
-        gb::NetworkManager::Instance()->Register(method, f);
-    };
-    network["Call"] = [](RpcCallPtr call, std::string method, sol::variadic_args args) {
-        gb::NetworkManager::Instance()->Call(call, method, args);
+                                            if (messgae)
+                                            {
+                                                gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
+                                            }
+                                        });
+    // ── BuildMeta ─────────────────────────────────
+    // Lua: meta_table -> binary bytes
+    network["BuildMeta"] = [](sol::table meta_tbl) -> std::vector<uint8_t> {
+        Meta meta;
+        meta.mode           = static_cast<MsgMode>(meta_tbl.get_or("mode", 0));
+        meta.entity_id      = meta_tbl.get_or<uint64_t>("entity_id", 0);
+        meta.type           = meta_tbl.get_or<uint32_t>("type", 0);
+        meta.method         = meta_tbl.get_or<uint64_t>("method", 0);
+        meta.sequence       = meta_tbl.get_or<uint64_t>("sequence", 0);
+        meta.compress_type  = static_cast<CompressType>(meta_tbl.get_or("compress_type", 0));
+        std::vector<uint8_t> out(sizeof(meta));
+        std::memcpy(out.data(), &meta, sizeof(meta));
+        return out;
     };
 
+    // ── ParseMeta ─────────────────────────────────
+    // binary bytes -> Lua table
+    network["ParseMeta"] = [scriptPtr](const std::vector<uint8_t>& data) -> sol::table {
+        Meta meta{};
+        if (data.size() >= sizeof(meta))
+            std::memcpy(&meta, data.data(), sizeof(meta));
+        sol::state_view lua(scriptPtr->lua_state());
+        sol::table tbl = lua.create_table();
+        tbl["mode"]          = static_cast<int>(meta.mode);
+        tbl["entity_id"]     = meta.entity_id;
+        tbl["type"]          = meta.type;
+        tbl["method"]        = meta.method;
+        tbl["sequence"]      = meta.sequence;
+        tbl["compress_type"] = static_cast<int>(meta.compress_type);
+        return tbl;
+    };
 
 	scriptPtr->new_usertype<Session>("Session");
-	scriptPtr->new_usertype<RpcCall>("RpcCall",
-									"new",sol::constructors<RpcCall>(),
-									"SetSession",&RpcCall::SetSession,
-									"SetCallBack",&RpcCall::SetCallBack<sol::function>);
-
-	scriptPtr->new_usertype<RpcReply>("RpcReply",
-									"new",sol::constructors<RpcReply(Meta&, const std::shared_ptr<Session>&), RpcReply(Meta&&, const std::shared_ptr<Session>&)>(),
-									"Invoke",sol::overload(static_cast<void(RpcReply::*)(sol::variadic_args)>(&RpcReply::Invoke))  );
 
 	scriptPtr->script(R"(   
 	function create_msg(proto_name)
@@ -201,6 +218,7 @@ static void register_msgpack(std::shared_ptr<Script>& scriptPtr)
 extern void register_proto_msg(std::shared_ptr<Script>& scriptPtr);
 extern void register_redis(std::shared_ptr<Script>& scriptPtr);
 extern void register_postgresql(std::shared_ptr<Script>& scriptPtr);
+extern void register_nats(std::shared_ptr<Script>& scriptPtr);
 
 void _lua_(std::shared_ptr<Script>& scriptPtr)
 {
@@ -208,6 +226,8 @@ void _lua_(std::shared_ptr<Script>& scriptPtr)
 	register_msgpack(scriptPtr);
     register_proto_msg(scriptPtr);
 	register_net(scriptPtr);
+    gb::RegisterRpcLua(scriptPtr);
     register_redis(scriptPtr);
     register_postgresql(scriptPtr);
+    register_nats(scriptPtr);
 }

@@ -12,32 +12,14 @@ RpcCall::RpcCall()
     , worker_index_(0)
     , local_seq_(0)
     , timeout_(std::chrono::milliseconds(kRpcdefaultTimeout))
-    , timeout_func_(nullptr)
-    , cancel_func_(nullptr)
     , state_(RpcState::Pending)
     , session_(nullptr)
-    , done_call_bcak_(nullptr)
 {
 }
 
 RpcCall::~RpcCall()
 {
     StopTimer();
-}
-
-void RpcCall::SetTimeout(std::function<void()> timeout_fun, int64_t timeout)
-{
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        timeout_func_ = std::move(timeout_fun);
-    }
-    SetTimeout(timeout);
-};
-
-void RpcCall::SetCancel(std::function<void()> cancel_fun)
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    cancel_func_ = std::move(cancel_fun);
 }
 
 void RpcCall::SetTimeout(int64_t timeout)
@@ -60,8 +42,9 @@ void RpcCall::SetSession(const std::shared_ptr<Session>& session)
 
 void RpcCall::BindCurrentExecutor()
 {
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    callback_executor_ = WorkerExecutor::Current(false);
+    // callback_executor_ no longer stored; result_callback_ runs inline on
+    // the Worker thread and refers to the captured WorkerExecutor inside the
+    // coroutine awaiter if needed.
 }
 
 void RpcCall::Call(Meta& meta, const ReadBufferPtr buffer /*= nullptr*/)
@@ -85,22 +68,14 @@ void RpcCall::Cancel()
     if (!state_.compare_exchange_strong(expected, RpcState::Cancelled, std::memory_order_acq_rel, std::memory_order_acquire))
         return;
 
-    // 从所属Worker的挂起映射中移除（Cancel必须在所属Worker线程中调用）
+    // 从所属Worker的挂起映射中移除
     auto _worker = WorkerManager::Instance()->GetWorker(worker_index_);
     if (_worker) _worker->TakePendingRpc(local_seq_);
 
-    std::function<void()> cancel_callback;
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        cancel_callback = cancel_func_;
-    }
-    Finish(std::move(cancel_callback));
-}
-
-bool RpcCall::HasCallBack() const
-{
-    std::lock_guard<std::mutex> lock(callback_mutex_);
-    return done_call_bcak_ != nullptr;
+    StopTimer();
+    Meta dummy_meta{};
+    if (result_callback_)
+        result_callback_(RpcErrorCode::Cancel, nullptr, nullptr, dummy_meta, 0, 0);
 }
 
 bool RpcCall::HasSession()
@@ -119,22 +94,8 @@ void RpcCall::Done(const SessionPtr& session, const ReadBufferPtr& buffer, Meta&
         return;
 
     StopTimer();
-    rpc_done_call callback;
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        callback = done_call_bcak_;
-    }
-    // 直接在当前Worker线程上调用回调。
-    // 不需要DispatchCompletion — Done()始终从所属Worker调用
-    // （IO线程将响应投递到此Worker，Worker在线程本地映射上调用TakePendingRpc，
-    //  然后内联调用Done()）。
-    //
-    // 回调（例如MakeRpcHandler的lambda）调用state->Complete(value)
-    // 或state->Resume()，后者调用NotifyCompleted() → executor_.schedule([h](){h.resume();})。
-    // 由于executor_是绑定到同一Worker的WorkerExecutor，其IsCurrent()
-    // 返回true，因此h.resume()内联执行 — 零上下文切换。
-    if (callback)
-        callback(session, buffer, meta, meta_size, data_size);
+    if (result_callback_)
+        result_callback_(RpcErrorCode::None, session, buffer, meta, meta_size, data_size);
 }
 
 bool RpcCall::IsError()
@@ -160,15 +121,13 @@ void RpcCall::StartTimer()
         RpcState expected = RpcState::Pending;
         if (!state_.compare_exchange_strong(expected, RpcState::InvalidRequest, std::memory_order_acq_rel, std::memory_order_acquire))
             return;
-        // 清理：从所属Worker的挂起映射中移除并调用取消回调
+        // 清理：从所属Worker的挂起映射中移除
         auto _w = WorkerManager::Instance()->GetWorker(worker_index_);
         if (_w) _w->TakePendingRpc(local_seq_);
-        std::function<void()> cancel_callback;
-        {
-            std::lock_guard<std::mutex> lock(callback_mutex_);
-            cancel_callback = cancel_func_;
-        }
-        Finish(std::move(cancel_callback));
+        StopTimer();
+        Meta dummy_meta{};
+        if (result_callback_)
+            result_callback_(RpcErrorCode::InvalidRequest, nullptr, nullptr, dummy_meta, 0, 0);
         return;
     }
 
@@ -183,43 +142,22 @@ void RpcCall::StartTimer()
 
         LOG_WARN("RPC timeout {}", self->id_);
 
-        // 超时在IO线程上触发 — 无法直接访问Worker的线程本地映射。
-        // 投递到所属Worker以便安全地从其挂起映射中移除。
+        // 超时在IO线程上触发 — 投递到所属Worker
         auto worker = WorkerManager::Instance()->GetWorker(self->worker_index_);
         if (!worker)
             return;
 
-        worker->Post([self, worker]() {
-            // 从所属Worker的挂起映射中移除（在所属Worker线程上安全执行）
-            worker->TakePendingRpc(self->local_seq_);
+        worker->Post([self]() {
+            // 从所属Worker的挂起映射中移除
+            auto w = WorkerManager::Instance()->GetWorker(self->worker_index_);
+            if (w) w->TakePendingRpc(self->local_seq_);
 
-            std::function<void()> timeout_callback;
-            {
-                std::lock_guard<std::mutex> lock(self->callback_mutex_);
-                timeout_callback = self->timeout_func_;
-            }
-            if (timeout_callback)
-                timeout_callback();
+            self->StopTimer();
+            Meta dummy_meta{};
+            if (self->result_callback_)
+                self->result_callback_(RpcErrorCode::Timeout, nullptr, nullptr, dummy_meta, 0, 0);
         });
     });
-}
-
-void RpcCall::DispatchCompletion(std::function<void()> cb) const
-{
-    if (!cb)
-        return;
-    WorkerExecutor executor;
-    {
-        std::lock_guard<std::mutex> lock(callback_mutex_);
-        executor = callback_executor_;
-    }
-    executor.Dispatch(std::move(cb));
-}
-
-void RpcCall::Finish(std::function<void()> completion)
-{
-    StopTimer();
-    DispatchCompletion(std::move(completion));
 }
 
 void RpcCall::StopTimer()
@@ -228,7 +166,6 @@ void RpcCall::StopTimer()
     {
         timer_handle_->timer.cancel();
     }
-    // 归还 timer 到池
     if (timer_handle_)
     {
         GetCurrentThreadTimerPool()->Release(timer_handle_);

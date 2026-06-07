@@ -8,6 +8,7 @@
 #include "network/io/message_meta.h"
 #include "gbnet/buffer/compressed_stream.h"
 #include "network/rpc/rpc_function_help.h"
+#include "network/rpc/register_rpc.h"
 
 
 
@@ -119,44 +120,45 @@ struct NetFunctionaTraits<sol::function, sol::function>
 {
 static net_listen_fun make(sol::function fn, std::string_view protoName)
 {
-auto lua_state = fn.lua_state();
-sol::state_view lua_view(lua_state);
-return [lua_view, fn, proto = std::string(protoName)](const SessionPtr& session, const ReadBufferPtr& buffer, Meta& meta, int meta_size, int64_t data_size) {
+sol::function main_func = BridgeCallback(std::move(fn));
+lua_State*    lstate    = main_func.lua_state();
+return [lstate, func = std::move(main_func), proto = std::string(protoName)](const SessionPtr& session, const ReadBufferPtr& buffer, Meta& meta, int meta_size, int64_t data_size) {
 if (proto.empty())
 {
-fn(session);
+func(session);
 return;
 }
-int  top        = lua_gettop(lua_view.lua_state());
+int  top        = lua_gettop(lstate);
+sol::state_view lua_view(lstate);
 auto create_msg = lua_view["create_msg"];
 
-if (!create_msg.valid())
-{
-lua_settop(lua_view.lua_state(), top);
-return;
-}
+    if (!create_msg.valid())
+    {
+        lua_settop(lstate, top);
+        return;
+    }
 
-sol::object lua_messgae = create_msg(proto);
-google::protobuf::Message* msg = lua_messgae.as<google::protobuf::Message*>();
-if (!msg)
-{
-lua_settop(lua_view.lua_state(), top);
-return;
-}
-if (meta.compress_type == CompressType::CompressTypeNone)
-{
-if (msg->ParsePartialFromZeroCopyStream(buffer.get()))
-fn(session, lua_messgae);
-}
-else
-{
-std::shared_ptr<AbstractCompressedInputStream> is(get_compressed_input_stream(buffer.get(), meta.compress_type));
-if (msg->ParsePartialFromZeroCopyStream(is.get()))
-fn(session, lua_messgae);
-}
-lua_settop(lua_view.lua_state(), top);
-};
-}
+    sol::object lua_messgae = create_msg(proto);
+    google::protobuf::Message* msg = lua_messgae.as<google::protobuf::Message*>();
+    if (!msg)
+    {
+        lua_settop(lstate, top);
+        return;
+    }
+        if (meta.compress_type == CompressType::CompressTypeNone)
+        {
+            if (msg->ParsePartialFromZeroCopyStream(buffer.get()))
+                func(session, lua_messgae);
+        }
+        else
+        {
+            std::shared_ptr<AbstractCompressedInputStream> is(get_compressed_input_stream(buffer.get(), meta.compress_type));
+            if (msg->ParsePartialFromZeroCopyStream(is.get()))
+                func(session, lua_messgae);
+        }
+        lua_settop(lstate, top);
+    };
+    }
 };
 
 

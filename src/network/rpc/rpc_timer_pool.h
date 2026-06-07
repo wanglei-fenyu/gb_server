@@ -2,7 +2,6 @@
 #include <memory>
 #include <vector>
 #include <functional>
-#include <mutex>
 #include <atomic>
 #include "gbnet/common/def.h"
 #include "gbnet/common/define.h"
@@ -46,7 +45,6 @@ public:
 
 private:
     std::vector<TimerHandlePtr> available_;
-    std::mutex                 mutex_;
     std::atomic<size_t>        pool_size_{0};
     std::atomic<size_t>        in_use_{0};
     size_t                     next_id_{0};

@@ -61,7 +61,7 @@ void NetworkManager::ListenOption(uint32_t type, net_listen_fun f, std::string p
 	listen_function_map_[key] = f;
 }
 
-void NetworkManager::CallImpl(RpcCallPtr call, std::string method, sol::variadic_args& args)
+void NetworkManager::CallImpl(RpcCallPtr call, std::string method, uint64_t id, sol::variadic_args& args)
 {
 	if (!call)
 		return;
@@ -69,6 +69,7 @@ void NetworkManager::CallImpl(RpcCallPtr call, std::string method, sol::variadic
 	uint64_t method_key = MD5::MD5Hash64(method.c_str());
 	meta.method = method_key;
 	meta.mode = MsgMode::Request;
+	meta.entity_id = id;
 	// sequence和call->SetId在CallImpl(Meta&, RpcCallPtr, ReadBufferPtr)内部处理
 	if (args.size() > 0)
 	{

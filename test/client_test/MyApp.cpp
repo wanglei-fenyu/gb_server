@@ -15,11 +15,20 @@ async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
 		call->SetSession(session);
 		//co_await gb::CoRpc<>::execute(call, "test_rpc");
 
-		int num = co_await gb::CoRpc<int>::execute(call, "square", 10000);
-		LOG_INFO("CORO_TEST  {}", num);
+		auto r1 = co_await gb::CoRpc<int>::execute(call, "square", 0, 10000);
+		if (r1)
+			LOG_INFO("CORO_TEST  {}", r1.value);
+		else
+			LOG_ERROR("CORO_TEST failed: {}", static_cast<int>(r1.error_code));
 
-		auto [a, b] = co_await gb::CoRpc<int, std::string>::execute(call, "test_ret_args", 2, "world");
-		LOG_INFO("coro_test_2  {} {}", a, b);
+		auto r2 = co_await gb::CoRpc<int, std::string>::execute(call, "test_ret_args", 0, 2, "world");
+		if (r2)
+		{
+			auto [a, b] = r2.value;
+			LOG_INFO("coro_test_2  {} {}", a, b);
+		}
+		else
+			LOG_ERROR("coro_test_2 failed: {}", static_cast<int>(r2.error_code));
 
     }
     catch (...)
