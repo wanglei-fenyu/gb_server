@@ -68,6 +68,7 @@ c++ 网络游戏服务器框架
 | `server_test` | `test/server_test/main.cpp` | `App` | 开发测试服务端 |
 | `client_test` | `test/client_test/main.cpp` | `App` | 开发测试客户端 |
 | `db_test` | `test/db_test/main.cpp` | 无（独立控制台） | 数据库/Redis 集成测试 |
+| `unit_test` | `test/unit_test/main.cpp` | 无（独立控制台） | 单元测试（路由、msgpack、调度器等） |
 | `login_server` | `server/login_server/main.cpp` | `ServerApp` | 登录服务器 |
 | `gateway_server` | `server/gateway_server/main.cpp` | `ServerApp` | 网关服务器 |
 | `scene_server` | `server/scene_server/main.cpp` | `ServerApp` | 场景服务器 |
@@ -124,6 +125,12 @@ app.Run()
   │              └─ Worker::OnStart() → InitLua()
   │                   ├─ open_libraries()
   │                   ├─ _lua_(scriptPtr)            — 注册 C++ 绑定
+  │                   │    ├─ register_log()
+  │                   │    ├─ register_msgpack()
+  │                   │    ├─ register_proto_msg()
+  │                   │    ├─ register_net()         — net.Listen/Send/BuildMeta/ParseMeta
+  │                   │    ├─ RegisterRpcLua()       — net.Register/Call/RpcCall/RpcReply + rpc.Await
+  │                   │    └─ register_nats()        — nats.Publish/Reply/Subscribe
   │                   ├─ require("socket.core")
   │                   ├─ start_debug.lua             — LuaPanda 调试器
   │                   └─ require("main.lua")         — ★ 用户 Lua 脚本
@@ -684,23 +691,24 @@ NetworkManager::Instance()->Register("method_name",
 ```cpp
 // ─── 回调风格 ───
 auto call = std::make_shared<RpcCall>();
-call->SetCallBack([](int result) {
-    // 处理响应
+call->SetCallBack([](RpcErrorCode err, int result) {
+    // 处理响应，err == RpcErrorCode::None 表示成功
 });
 call->SetTimeout([]() {
     // 超时处理
 }, 5000);
 call->SetSession(session);                  // 绑定会话（可选）
-NetworkManager::Instance()->Call(call, "method_name", arg1, arg2);
+NetworkManager::Instance()->Call(call, "method_name", 0, arg1, arg2);
 
 // ─── 协程风格（CoRpc）───
-// CoRpc<T>::execute(call, method, args...) → async_simple::Lazy<T>
+// CoRpc<T>::execute(call, method, id, args...) → async_simple::Lazy<RpcResult<T>>
 auto result = co_await CoRpc<int>::execute(
-    std::make_shared<RpcCall>(), "method_name", arg1, arg2);
+    std::make_shared<RpcCall>(), "method_name", 0, arg1, arg2);
+// result.error_code 判断成功，result.value 获取返回值
 
 // 多返回值协程
 auto [a, b, c] = co_await CoRpc<int, std::string, float>::execute(
-    std::make_shared<RpcCall>(), "multi_return", arg1);
+    std::make_shared<RpcCall>(), "multi_return", 0, arg1);
 
 // 无返回值协程
 co_await CoRpc<void>::execute(
@@ -712,7 +720,8 @@ co_await CoRpc<void>::execute(
 ```
 ┌─ 调用端 (Worker 线程) ─────────────────────────────────┐
 │                                                         │
-│  NetworkManager::Call(call, "method", args...)            │
+│  NetworkManager::Call(call, "method", 0, args...)         │
+│    0. meta.entity_id = id                                 │
 │    1. MD5::MD5Hash64("method") → method_key              │
 │    2. msgpack::pack(args...) → buffer                    │
 │    3. local_seq = worker->AllocRpcSeq()                  │
@@ -752,10 +761,12 @@ co_await CoRpc<void>::execute(
 ## 关键类
 
 | 类 | 作用 |
-|---|---|
+|---|---|---|
 | `RpcCall` | RPC 请求对象，管理超时/取消/回调/状态 |
 | `RpcReply` | RPC 响应对象，服务端通过它 `Invoke()` 返回数据 |
-| `CoRpc<T>` | 协程包装器，将 RPC 调用包装为 `async_simple::Lazy<T>` |
+| `CoRpc<T>` | 协程包装器，返回 `RpcResult<T>`（错误码 + 值） |
+| `RpcErrorCode` | 统一错误码枚举（None/Timeout/Cancel/RemoteError 等） |
+| `RpcResult<T>` | 统一返回值，`.error_code` + `.value`，支持 `co_await` |
 | `RpcCallAwaiter<T>` | `co_await` 可等待对象，内部管理 RpcAwaitState |
 | `SequenceId` | union 编码 worker_index(32) + local_seq(32) |
 | `ThreadLocalRpcContext` | 每个线程独立的 RPC 待处理映射（无锁） |
@@ -776,12 +787,15 @@ Worker::OnStart()
        │    ├─ register_log()              — log.Info/Error/Warning
        │    ├─ register_msgpack()          — msgpack.pack/unpack
        │    ├─ register_proto_msg()        — protobuf 消息类型注册
-       │    └─ register_net()              — net.Listen/Register/Send/Call
+       │    ├─ register_net()              — net.Listen/Send/BuildMeta/ParseMeta
+        │    ├─ RegisterRpcLua()            — net.Register/Call/RpcCall/RpcReply + rpc.Await
+       │    └─ register_nats()             — nats.Publish/Reply/Subscribe
        ├─ require("socket.core")           — LuaSocket
        ├─ start_debug.lua                  — LuaPanda 调试器（可选）
        └─ require("main.lua")              — ★ 用户 Lua 脚本
             ├─ net.Listen(type, func, "ProtoName")
             ├─ net.Register("method", func)
+            ├─ nats.Connect/Publish/Reply/Subscribe
             └─ (业务逻辑)
 ```
 
@@ -846,10 +860,10 @@ net.Register("rpc_multi_args", rpc_multi_args)
 -- ─── 客户端发起 RPC 调用 ───
 local call = RpcCall.new()
 call:SetSession(session)
-call:SetCallBack(function(reply, result)
+call:SetCallBack(function(reply, err, result)
     log.Info("RPC response: " .. result)
 end)
-net.Call(call, "lua_rpc_test_args", "hello")
+net.Call(call, "lua_rpc_test_args", 0, "hello")
 ```
 
 ## RPC 参数类型映射
@@ -866,26 +880,56 @@ RPC 使用 **msgpack** 序列化参数，Lua 与 C++ 的类型对应：
 
 ## Lua API 参考
 
+### net 表（内置消息 + RPC）
+
 | API | 说明 |
 |---|---|
 | `net.Listen(type, func, "ProtoName")` | 注册消息处理器，type 匹配 MessageType，第三个参数指定 protobuf 类型名 |
-| `net.Register("method", func)` | 注册 RPC 方法 |
+| `net.Register("method", func)` | 注册 RPC 方法，func(reply, args...) |
 | `net.Send(session, type, entity_id, "ProtoName", msg)` | 发送 protobuf 消息 |
-| `net.Call(call, "method", ...)` | 发起 RPC 调用 |
+| `net.Call(call, "method", id, ...)` | 发起 RPC 调用（id 为 entity_id 路由参数） |
+| `rpc.Await("method", id, setup, ...)` | 协程风格 RPC 调用，`coroutine.create` 中使用，返回 `(err, ...)`；`setup` 为可选 `function(call)`，可在发送前配置 RpcCall（SetSession、SetTimeout 等） |
+| `net.BuildMeta(meta_table)` | 将 Lua meta table → 二进制 bytes（用于 NATS） |
+| `net.ParseMeta(meta_bytes)` | 二进制 bytes → Lua meta table |
 | `log.Info(str)` / `log.Error(str)` / `log.Warning(str)` | 日志（带源码位置追踪） |
 | `msgpack.pack(...)` | msgpack 序列化 |
 | `msgpack.unpack(data)` | msgpack 反序列化 |
 | `create_msg("ProtoName")` | 创建 protobuf 消息对象 |
+
+### RpcCall / RpcReply 对象
+
+| API | 说明 |
+|---|---|
 | `RpcCall.new()` | 创建 RPC 调用对象 |
 | `RpcCall:SetSession(session)` | 绑定会话 |
-| `RpcCall:SetCallBack(func)` | 设置回调函数，`func(返回值...)` |
+| `RpcCall:SetCallBack(func)` | 设置回调，`func(reply, err, 返回值...)`，`err` 为 `RpcErrorCode` |
+| `RpcCall:SetTimeout(func, ms)` | 设置超时回调 |
+| `RpcCall:SetId(id)` | 设置 entity_id |
+| `RpcCall:Cancel()` | 取消 RPC 调用 |
 | `RpcReply:Invoke(...)` | 在 RPC 处理器中返回响应 |
+
+### nats 表（NATS 消息系统）
+
+| API | 说明 |
+|---|---|
+| `nats.Connect(url)` | 连接 NATS Server |
+| `nats.Disconnect()` | 断开连接 |
+| `nats.IsConnected()` | 检查连接状态 → bool |
+| `nats.Publish(subject, meta_bytes, data)` | 发送消息（data 为 string，raw bytes） |
+| `nats.Publish(subject, meta_bytes, proto_msg)` | 发送 protobuf 消息 |
+| `nats.Publish(subject, meta_bytes, ...)` | 发送 msgpack 变参 |
+| `nats.Reply(reply_to, meta_bytes, data)` | 回复 Request（raw bytes） |
+| `nats.Reply(reply_to, meta_bytes, proto_msg)` | 回复 Request（protobuf） |
+| `nats.Reply(reply_to, meta_bytes, ...)` | 回复 Request（msgpack 变参）|
+| `nats.Subscribe(subject, handler)` | 订阅 raw bytes，`handler(meta_tbl, body_str, reply_to)` |
+| `nats.Subscribe(subject, handler, "ProtoName")` | 订阅 protobuf 消息，`handler(meta_tbl, proto_msg, reply_to)` |
+| `nats.Subscribe(subject, handler, "msgpack")` | 订阅 msgpack 消息，`handler(meta_tbl, values_tbl, reply_to)` |
 
 ## Lua 注意事项
 
 1. **每个 Worker 独立 Lua 状态**：`net.Listen` 和 `net.Register` 在每个 Worker 线程各调用一次
 2. **注册必须在 Freeze 之前**：所有 Lua 初始化完成后才会调用 `Freeze()`，在此之前必须完成所有注册
-3. **Lua 的 protobuf 桥接**：通过 `lua_pb_parse.h` 实现 protobuf ↔ Lua table 的双向转换
+3. **Lua 的 protobuf 桥接**：protobuf 消息对象直接传递给 Lua（非 table），通过 `create_msg` 创建、sol2 usertype 访问字段。`protobuf_new_table`（protobuf → Lua table 转换）已废弃，仅 `lua_pb_parse.{h,cpp}` 保留向后兼容。
 4. **调试支持**：`script/start_debug.lua` 启用 LuaPanda 调试器（`127.0.0.1:8828`）
 
 ---
@@ -1305,6 +1349,152 @@ coroutine.resume(co)
 
 ---
 
+# 模块十二：NATS 消息系统
+
+基于 **nats.c**（C 客户端库），向 Lua 暴露统一消息通信接口（Publish/Reply/Request/Subscribe）。集成 `Meta` 消息头，支持 raw bytes、protobuf、msgpack 三种载荷格式。
+
+## 架构概览
+
+```
+Lua Worker Thread                      nats.c I/O Threads     NATS Server
+      │                                      │                    │
+      ├─ nats.Publish(subject, meta, ...) ───┤                    │
+      ├─ nats.Subscribe(subject, handler) ───┤                    │
+      │                                      ├─ natsConnection    │
+      │                                      │   ··· async ···    │
+      │                                      ├─ OnNatsSubMsg() ───┤
+      │  Post 到订阅 Worker 队列 ←───────────┤                    │
+      ▼                                      ▼                    ▼
+  Worker 帧循环                          nats.c 线程池        NATS Server
+```
+
+- 全局唯一 NATS 连接（`natsManager` 单例）
+- `nats.c` 的回调在 nats 内部 I/O 线程上触发，通过 `Worker::Post` 投递到订阅的 Worker 线程
+- `subscribe` 时记录当前 `worker_index`，回调直接投递到该 Worker 的帧循环
+- 所有 Lua handler 在 Worker 线程上下文中安全执行
+
+## C++ API 参考
+
+### 连接
+
+```cpp
+#include "network/nats/nats_manager.h"
+
+NatsManager::Instance()->Connect("nats://127.0.0.1:4222");
+NatsManager::Instance()->Disconnect();
+bool ok = NatsManager::Instance()->IsConnected();
+```
+
+### Publish
+
+```cpp
+// raw bytes
+NatsManager::Instance()->Publish("subject", meta, data_bytes);
+
+// protobuf
+NatsManager::Instance()->Publish("subject", meta, protoMsg);
+
+// msgpack 变参
+NatsManager::Instance()->Publish("subject", meta, arg1, arg2, arg3);
+```
+
+### Subscribe
+
+```cpp
+// raw bytes handler
+NatsManager::Instance()->Subscribe("subject",
+    [](const Meta& m, const std::vector<uint8_t>& body,
+       const std::string& reply_to) {});
+
+// C++ 模板 Subscribe（自动反序列化）
+NatsManager::Instance()->Subscribe<MyProto>("subject",
+    [](NatsResult<MyProto> r) { /* r.value 是 MyProto */ });
+
+NatsManager::Instance()->Subscribe<int>("subject",
+    [](NatsResult<int> r) { /* r.value 是 int */ });
+
+NatsManager::Instance()->Subscribe<int, float>("subject",
+    [](NatsResult<int, float> r) {
+        auto [a, b] = r.value;  // tuple 解包
+    });
+```
+
+### Request（协程风格）
+
+```cpp
+// 原始 bytes
+auto raw = co_await NatsManager::Instance()->RequestRaw(
+    "subject", meta, data_bytes, 5s);
+
+// 模板 Request（protobuf 请求 + protobuf 响应）
+auto r = co_await NatsManager::Instance()->Request<MyProto>(
+    "subject", meta, request_msg);
+// r.value 是 MyProto
+
+// 模板 Request（msgpack 请求 + msgpack 响应）
+auto r = co_await NatsManager::Instance()->Request<int>(
+    "subject", meta, arg1, arg2);
+```
+
+### Reply
+
+```cpp
+// raw bytes
+NatsManager::Instance()->Reply(reply_to, meta, data_bytes);
+
+// protobuf
+NatsManager::Instance()->Reply(reply_to, meta, protoMsg);
+
+// msgpack 变参
+NatsManager::Instance()->Reply(reply_to, meta, arg1, arg2);
+```
+
+## Lua API
+
+NATS Lua API 统一在 `nats` 表下（`script/register_nats.cpp` 注册），通过 `sol::overload` 实现多态：
+
+| Lua API | 说明 |
+|---|---|
+| `nats.Connect(url)` | 连接 NATS Server |
+| `nats.Disconnect()` | 断开连接 |
+| `nats.IsConnected()` | 检查连接状态 |
+| `nats.Publish(subject, meta, data)` | 发送 raw bytes 消息 |
+| `nats.Publish(subject, meta, proto_msg)` | 发送 protobuf 消息 |
+| `nats.Publish(subject, meta, ...)` | 发送 msgpack 变参 |
+| `nats.Reply(reply_to, meta, data)` | 回复 raw bytes |
+| `nats.Reply(reply_to, meta, proto_msg)` | 回复 protobuf |
+| `nats.Reply(reply_to, meta, ...)` | 回复 msgpack 变参 |
+| `nats.Subscribe(subject, handler)` | 订阅 raw bytes，handler(meta, body_str, reply_to) |
+| `nats.Subscribe(subject, handler, "ProtoName")` | 订阅 protobuf，handler(meta, proto_msg, reply_to) |
+| `nats.Subscribe(subject, handler, "msgpack")` | 订阅 msgpack，handler(meta, values_tbl, reply_to) |
+
+**NATS Publish/Reply 3 种载荷格式：**
+
+| 第三个参数类型 | 序列化方式 |
+|---|---|
+| `string` | 原始 bytes 发送 |
+| protobuf userdata（`create_msg` 创建） | `Message::SerializeToString` |
+| 无第三个参数，使用 `...` 变参 | msgpack 打包 |
+
+**NATS Subscribe 调用约定：**
+
+| 参数模式 | handler 签名 |
+|---|---|
+| `Subscribe(subject, handler)` 2 参数 | `function(meta_tbl, body_str, reply_to)` |
+| `Subscribe(subject, handler, "ProtoName")` 3 参数 | `function(meta_tbl, proto_msg, reply_to)` |
+| `Subscribe(subject, handler, "msgpack")` 3 参数 | `function(meta_tbl, values_tbl, reply_to)` |
+
+## 关键实现细节
+
+- **`NatsResult<T...>`** — 模板结果类型，单值 `T .value` / 多值 `tuple<T...> .value` / `void` 仅状态
+- **`NatsError`** — 错误码：`OK(0)`, `Timeout(-1)`, `Disconnected(-2)`, `PublishFailed(-3)`, `SubscribeFailed(-4)`, `RequestFailed(-5)`
+- **`NatsHandler`** — `std::function<void(const Meta&, const std::vector<uint8_t>&, const std::string&)>`，`reply_to` 在 Request 消息时不为空
+- **`BuildMeta`/`ParseMeta`** — 在 `net` 表下（`register_script.cpp`），将 Lua table ↔ 二进制 Meta bytes 互相转换，供 NATS Lua 调用者使用
+- 注册表文件：[`src/network/nats/register_nats.cpp`](src/network/nats/register_nats.cpp) 同时负责 C++ 和 Lua 绑定
+- NATS Subscribe proto handler 直接传递 protobuf 消息对象给 Lua（非 table 转换）—— 与 `net.Listen` 行为一致
+
+---
+
 # 目录结构
 
 ```
@@ -1320,10 +1510,13 @@ src/
     io/                  — Server, Client, Session, Listener, IoServicePool
     manager/             — NetworkManager（单例，统一入口）
     router/              — Router, RouteTable, LockFreeRouteTable, MessageType
-    rpc/                 — RpcCall, RpcReply, CoRpc, ThreadLocalRpcContext
+    rpc/                 — RpcCall, RpcReply, CoRpc, register_rpc,
+                           ThreadLocalRpcContext
+    nats/                — NatsManager, register_nats（Lua API）
     http/                — HttpServer, HttpClient, HttpSession/HttpsSession
     msgpack/             — 自定义 msgpack packer/unpacker
-  script/                — Script(sol::state), protobuf↔Lua 桥接
+  script/                — Script(sol::state), protobuf↔Lua 桥接,
+                           register_script
   db/
     redis/               — Redis 连接池 + Lua 绑定（Boost.Redis）
     postgres/            — PostgreSQL 连接 + Lua 绑定（libpq）
@@ -1337,6 +1530,7 @@ test/                    — 测试进程
   server_test/           — server test (App)
   client_test/           — client test (App)
   db_test/               — 数据库集成测试（独立控制台，不依赖 App）
+  unit_test/             — 单元测试（app_test, msgpack_test, route_test, scheduler_test）
 
 res/                     — 资源文件
   config/server_config.xml  — IP/Port 配置

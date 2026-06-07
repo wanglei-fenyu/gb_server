@@ -40,36 +40,42 @@ void RegisterRpcLua(std::shared_ptr<Script>& scriptPtr)
         "Invoke", sol::overload(
             static_cast<void(RpcReply::*)(sol::variadic_args)>(&RpcReply::Invoke)));
 
-    // ── net.Await coroutine bridge ──
+    // ── rpc table ──
+    scriptPtr->create_table("rpc");
+
+    // ── rpc.Await coroutine bridge ──
     // Call RPC from a Lua coroutine with (err_code, ...values) returns.
-    // Pattern: net.Await("method", arg1, arg2) -> err, result
+    // rpc.Await(method, id, setup, ...) -> err, result
+    // setup is an optional function(call) to configure RpcCall before sending
+    // (e.g. SetSession, SetTimeout, SetId, Cancel).
     lua_State* L = scriptPtr->lua_state();
     luaL_dostring(L, R"(
-        if not net.Await then
-            function net.Await(method, id, ...)
-                if id == nil then id = 0 end
-                local co = coroutine.running()
-                if not co then
-                    error("net.Await() must be called from a coroutine")
-                end
-                local args = { ... }
-                local results = nil
-                local yielded = false
-                local call = RpcCall.new()
-                call:SetCallBack(function(reply, err, ...)
-                    results = { err, ... }
-                    if yielded then
-                        coroutine.resume(co)
-                    end
-                end)
-                net.Call(call, method, id, table.unpack(args))
-                if results == nil then
-                    yielded = true
-                    coroutine.yield()
-                    yielded = false
-                end
-                return table.unpack(results)
+        function rpc.Await(method, id, setup, ...)
+            if id == nil then id = 0 end
+            local co = coroutine.running()
+            if not co then
+                error("rpc.Await() must be called from a coroutine")
             end
+            local args = { ... }
+            local results = nil
+            local yielded = false
+            local call = RpcCall.new()
+            if setup then
+                setup(call)
+            end
+            call:SetCallBack(function(reply, err, ...)
+                results = { err, ... }
+                if yielded then
+                    coroutine.resume(co)
+                end
+            end)
+            net.Call(call, method, id, table.unpack(args))
+            if results == nil then
+                yielded = true
+                coroutine.yield()
+                yielded = false
+            end
+            return table.unpack(results)
         end
     )");
 }
