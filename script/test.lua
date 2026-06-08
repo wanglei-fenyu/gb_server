@@ -13,4 +13,4 @@ local function test_rpc()
 end
 
 
---test_rpc()
+test_rpc()

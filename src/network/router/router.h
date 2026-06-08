@@ -40,6 +40,9 @@ namespace gb
 
 		// ── 实体路由（Stateful 策略专用） ──────────────────────
 
+		/// 绑定单个实体到指定 Worker（主线程调用）。
+		void BindSingleEntity(uint64_t entity_id, uint32_t worker_index);
+
 		/// 绑定区间到指定 Worker（主线程调用）。
 		void BindEntity(uint64_t entity_begin, uint64_t entity_end, uint32_t worker_index);
 

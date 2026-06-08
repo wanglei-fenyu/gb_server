@@ -918,13 +918,14 @@ private:
 
     void safe_incremen(std::size_t size = 1)
     {
-        if (dataEnd_ - dataPointer_ >= 0)
+        if (dataPointer_ + size <= dataEnd_)
         {
             dataPointer_ += size;
         }
         else
         {
-			ec = make_error_code(UnPackErrorType::eOutRange);
+            dataPointer_ = dataEnd_;
+            ec = make_error_code(UnPackErrorType::eOutRange);
         }
     }
 

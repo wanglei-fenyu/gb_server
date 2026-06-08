@@ -4,6 +4,7 @@
 #include "base/res_path.h"
 #include "network/manager/network_manager.h"
 #include "cxxopts.hpp"
+#include "../../src/base/singleton.h"
 
  MyApp::MyApp(int argc, char* argv[]) :
     App(argc, argv)
@@ -110,6 +111,7 @@ void MyApp::init_http()
 int NormalWorkerLogic::OnStartup()
 {
     LOG_INFO(__FUNCTION__);
+    gb::NetworkManager::Instance()->GetRouter().BindSingleEntity(1111, gb::WorkerManager::Instance()->GetCurWorker()->GetIndex());
     return 0;
 }
 

@@ -51,6 +51,12 @@ public:
 
     // ── 写端（必须在主线程调用） ──────────────────────────────
 
+    /// 绑定单个 entity_id 到指定 Worker。
+    void BindSingle(uint64_t entity_id, uint32_t worker_index)
+    {
+        Bind(entity_id, entity_id + 1, worker_index);
+    }
+
     /// 绑定区间 [entity_begin, entity_end) 到指定 Worker。
     /// 与已有区间重叠的部分将被覆盖。
     void Bind(uint64_t entity_begin, uint64_t entity_end, uint32_t worker_index)

@@ -7,6 +7,7 @@
 static bool is_net_init = false;
 
 
+std::shared_ptr<gb::Client> g_client_;
 async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
 {
     try
@@ -15,13 +16,13 @@ async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
 		call->SetSession(session);
 		//co_await gb::CoRpc<>::execute(call, "test_rpc");
 
-		auto r1 = co_await gb::CoRpc<int>::execute(call, "square", 0, 10000);
+		auto r1 = co_await gb::CoRpc<int>::execute(call, "square", 1111, 10000);
 		if (r1)
 			LOG_INFO("CORO_TEST  {}", r1.value);
 		else
 			LOG_ERROR("CORO_TEST failed: {}", static_cast<int>(r1.error_code));
 
-		auto r2 = co_await gb::CoRpc<int, std::string>::execute(call, "test_ret_args", 0, 2, "world");
+		auto r2 = co_await gb::CoRpc<int, std::string>::execute(call, "test_ret_args", 1111, 2, "world");
 		if (r2)
 		{
 			auto [a, b] = r2.value;
@@ -84,6 +85,7 @@ int MyApp::OnInit()
 	client_->SetConnnectCallBack([this](const gb::SessionPtr session) {
         LOG_INFO("net connect");
         is_net_init = true;
+		g_client_ = client_;
         //session->StartHeartbeat(std::chrono::seconds(2));
         
         auto t1 = gb::WorkerManager::Instance()->GetWorker(0)->GetTimerManager()->RegisterTimer(
@@ -101,14 +103,15 @@ int MyApp::OnInit()
             10000, []() {
                 LOG_ERROR("t3");
             },
+           
             false);
 
         SendMsg1(client_);
-        gb::WorkerManager::Instance()->GetWorker(0)->Post([this]() {
-           //async_simple::coro::syncAwait(test_coro_2(client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)));
-           // SendRpc(client_);
-            test_coro_2(client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)).start([](auto&&) {});
-            });
+        //gb::WorkerManager::Instance()->GetWorker(0)->Post([this]() {
+        //   //async_simple::coro::syncAwait(test_coro_2(client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)));
+        //   // SendRpc(client_);
+        //    test_coro_2(client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)).start([](auto&&) {});
+        //    });
 
         //http_test(client_);
     });
@@ -175,6 +178,8 @@ void MyApp::test_http()
 int NormalWorkerLogic::OnStartup()
 {
     LOG_INFO(__FUNCTION__);
+    gb::NetworkManager::Instance()->GetRouter().BindSingleEntity(1111, gb::WorkerManager::Instance()->GetCurWorker()->GetIndex());
+    test_coro_2(g_client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)).start([](auto&&) {});
     return 0;
 }
 

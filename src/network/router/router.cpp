@@ -112,6 +112,11 @@ namespace gb
 
     // ── 实体路由 ──────────────────────────────────────────────────
 
+    void Router::BindSingleEntity(uint64_t entity_id, uint32_t worker_index)
+    {
+        entity_route_table_.BindSingle(entity_id, worker_index);
+    }
+
     void Router::BindEntity(uint64_t entity_begin, uint64_t entity_end, uint32_t worker_index)
     {
         entity_route_table_.Bind(entity_begin, entity_end, worker_index);
