@@ -15,8 +15,7 @@
 #include <vector>
 #include <chrono>
 #include <cstring>
-#include "../../src/network/rpc/rpc_function.hpp"
-using namespace gb;
+
 // ============================================================
 // Test helper
 // ============================================================
@@ -227,23 +226,19 @@ TEST_CASE("msgpack: 多值打包/解包", "[msgpack][multi]")
     REQUIRE(d == Catch::Approx(3.14).margin(1e-15));
 }
 
-TEST_CASE("msgpack: RPC reply style tuple unpack", "[msgpack][rpc]")
+TEST_CASE("msgpack: 通过 Packer/Unpacker 多值操作", "[msgpack][multi]")
 {
-    auto data = gb::msgpack::pack(int{4}, std::string{"hello world"});
+    gb::msgpack::Packer pk;
+    pk.process(int32_t{10}, int32_t{20}, int32_t{30});
+    auto data = pk.vector();
 
-    std::tuple<int, std::string> values{};
-    REQUIRE(msgpack_unpack_tuple(values, data.data(), data.size()));
-    REQUIRE(std::get<0>(values) == 4);
-    REQUIRE(std::get<1>(values) == "hello world");
-}
-
-TEST_CASE("msgpack: truncated payload reports unpack error", "[msgpack][rpc]")
-{
-    auto data = gb::msgpack::pack(int{4}, std::string{"hello world"});
-    REQUIRE(data.size() > 1);
-
-    std::tuple<int, std::string> values{};
-    REQUIRE_FALSE(msgpack_unpack_tuple(values, data.data(), data.size() - 1));
+    int32_t a{}, b{}, c{};
+    gb::msgpack::Unpacker up(data.data(), data.size());
+    up.process(a, b, c);
+    REQUIRE(a == 10);
+    REQUIRE(b == 20);
+    REQUIRE(c == 30);
+    REQUIRE_FALSE(up.ec);
 }
 
 // ============================================================

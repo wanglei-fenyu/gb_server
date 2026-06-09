@@ -961,6 +961,9 @@ private:
         } else if constexpr (is_stack_proxy<typename std::decay<T>::type>::value)
         {
              unpack_stack_proxy(value);
+        } else if constexpr (std::is_arithmetic_v<typename std::decay<T>::type>)
+        {
+            unpack_number(value);
         } else {
             if constexpr (has_pack<typename std::decay<T>::type>::value)
             {
@@ -1350,7 +1353,18 @@ private:
     {
         if constexpr (std::is_arithmetic<T>::value)
         {
-            if (safe_data() == (uint8_t)format_t::uint64)
+            // fixint: 0x00-0x7f positive, 0xe0-0xff negative
+            if (safe_data() <= 0x7f)
+            {
+                val = static_cast<T>(safe_data());
+                safe_incremen();
+            }
+            else if (safe_data() >= 0xe0)
+            {
+                val = static_cast<T>(static_cast<int8_t>(safe_data()));
+                safe_incremen();
+            }
+            else if (safe_data() == (uint8_t)format_t::uint64)
             {
                 uint64_t value = 0;
                 safe_incremen();
@@ -1590,6 +1604,9 @@ inline void Unpacker::unpack_type(std::string &value)
 			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
 			safe_incremen();
 		}
+	} else if (safe_data() >= (uint8_t)0xa0 && safe_data() <= (uint8_t)0xbf) {
+		strSize = safe_data() & 0b00011111;
+		safe_incremen();
 	} else {
 		return;
 	}
