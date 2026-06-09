@@ -8,20 +8,25 @@ static bool is_net_init = false;
 
 
 std::shared_ptr<gb::Client> g_client_;
-async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
+async_simple::coro::Lazy<> test_coro_2(gb::SessionPtr session)
 {
     try
     {
-		gb::RpcCallPtr call = std::make_shared<gb::RpcCall>();
-		call->SetSession(session);
-		//co_await gb::CoRpc<>::execute(call, "test_rpc");
+	//co_await gb::CoRpc<>::execute(call, "test_rpc");
 
+	{
+		auto call = std::make_shared<gb::RpcCall>();
+		call->SetSession(session);
 		auto r1 = co_await gb::CoRpc<int>::execute(call, "square", 1111, 10000);
 		if (r1)
 			LOG_INFO("CORO_TEST  {}", r1.value);
 		else
 			LOG_ERROR("CORO_TEST failed: {}", static_cast<int>(r1.error_code));
+	}
 
+	{
+		auto call = std::make_shared<gb::RpcCall>();
+		call->SetSession(session);
 		auto r2 = co_await gb::CoRpc<int, std::string>::execute(call, "test_ret_args", 1111, 2, "world");
 		if (r2)
 		{
@@ -30,7 +35,7 @@ async_simple::coro::Lazy<> test_coro_2(const gb::SessionPtr& session)
 		}
 		else
 			LOG_ERROR("coro_test_2 failed: {}", static_cast<int>(r2.error_code));
-
+	}
     }
     catch (...)
     {
@@ -179,7 +184,18 @@ int NormalWorkerLogic::OnStartup()
 {
     LOG_INFO(__FUNCTION__);
     gb::NetworkManager::Instance()->GetRouter().BindSingleEntity(1111, gb::WorkerManager::Instance()->GetCurWorker()->GetIndex());
-    test_coro_2(g_client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY)).start([](auto&&) {});
+    if (g_client_)
+    {
+        auto session = g_client_->GetSession(gb::CONNECT_TYPE::CT_GATEWAY);
+        if (session)
+            test_coro_2(session).start([](auto&&) {});
+        else
+            LOG_WARN("No gateway session available - server may not be running");
+    }
+    else
+    {
+        LOG_WARN("Client not initialized - connection failed");
+    }
     return 0;
 }
 

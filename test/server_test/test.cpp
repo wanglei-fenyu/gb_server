@@ -35,11 +35,11 @@ void square(gb::RpcReply reply, int a)
 	reply.Invoke(a*a);
 }
 
-void test_ret_args(gb::RpcReply reply,int a,std::string b)
+void test_ret_args(gb::RpcReply reply, int a, std::string c)
 {
-    LOG_INFO("{}:{}", a, b);
+    LOG_INFO("{}:{}", a, c);
     reply.GetMeta().compress_type = (CompressType)CompressTypeNone;
-    reply.Invoke(a*2, b+" hello");
+    reply.Invoke(a*2, c + " hello");
 }
 
 void SessionMsg(const gb::SessionPtr& session,TestMsg& msg)
@@ -53,5 +53,5 @@ void Test_Register()
 	gb::NetworkManager::Instance()->Register("test_rpc", test_rpc);
 	gb::NetworkManager::Instance()->Register("test_rpc2", test_rpc2);
 	gb::NetworkManager::Instance()->Register("square", square);
-	gb::NetworkManager::Instance()->Register("test_ret_args", test_ret_args);
+	gb::NetworkManager::Instance()->Register<void(gb::RpcReply, int, std::string)>("test_ret_args", test_ret_args);
 }

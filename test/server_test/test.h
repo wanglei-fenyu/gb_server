@@ -12,7 +12,7 @@ void test_rpc2(int a);
 
 void square(gb::RpcReply reply, int a);
 
-void test_ret_args(gb::RpcReply reply, int a, std::string b);
+void test_ret_args(gb::RpcReply reply, int a, std::string c);
 
 void SessionMsg(const gb::SessionPtr& session, TestMsg& msg);
 
