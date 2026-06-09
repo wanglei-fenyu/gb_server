@@ -26,6 +26,7 @@
 #undef min
 #endif
 #endif
+
 NAMESPACE_BEGIN(gb::msgpack)
 
 class Packer;
@@ -72,8 +73,6 @@ inline std::error_code make_error_code(UnPackErrorType error_type)
 
 NAMESPACE_END
 
-// 将解包错误码
-
 namespace std
 {
     template <>
@@ -83,6 +82,7 @@ namespace std
 }
 
 NAMESPACE_BEGIN(gb::msgpack)
+
 enum class format_t : uint8_t
 {
     nil = 0xc0,
@@ -153,7 +153,6 @@ template <typename T, typename Alloc>
 struct is_containe<std::unordered_set<T, Alloc>> : public std::true_type
 {
 };
-
 
 template <typename T>
 struct is_stdarray : public std::false_type
@@ -295,7 +294,7 @@ private:
     template <typename T>
     void pack_type(const T &value)
     {
-        if constexpr (std::is_enum<typename std::decay<T>::type>::value) // 枚举
+        if constexpr (std::is_enum<typename std::decay<T>::type>::value)
         {
             pack_type((int32_t)value);
         }
@@ -333,26 +332,34 @@ private:
     template <typename T>
     void pack_array(const T &array)
     {
-        if (array.size() < std::numeric_limits<uint16_t>::max())
+        const size_t size = array.size();
+
+        if (size <= 15)
+        {
+            // fixarray
+            serializedObj_.emplace_back(uint8_t(0x90 | size));
+        }
+        else if (size <= 0xffff)
         {
             serializedObj_.emplace_back((uint8_t)format_t::array16);
             for (auto i = sizeof(uint16_t); i > 0; --i)
             {
-                serializedObj_.emplace_back(uint8_t(array.size() >> (8 * (i - 1)) & 0xff)); // 8 == uint8_t
+                serializedObj_.emplace_back(uint8_t(size >> (8 * (i - 1)) & 0xff));
             }
         }
-        else if (array.size() < std::numeric_limits<uint32_t>::max())
+        else if (size <= 0xffffffff)
         {
             serializedObj_.emplace_back((uint8_t)format_t::array32);
             for (auto i = sizeof(uint32_t); i > 0; --i)
             {
-                serializedObj_.emplace_back(uint8_t(array.size() >> (8 * (i - 1)) & 0xff));
+                serializedObj_.emplace_back(uint8_t(size >> (8 * (i - 1)) & 0xff));
             }
         }
         else
         {
-            return;
+            return; // too large
         }
+
         for (const auto &item : array)
         {
             pack_type(item);
@@ -362,22 +369,34 @@ private:
     template <typename T>
     void pack_map(const T &map)
     {
-        if (map.size() < std::numeric_limits<uint16_t>::max())
+        const size_t size = map.size();
+
+        if (size <= 15)
+        {
+            // fixmap
+            serializedObj_.emplace_back(uint8_t(0x80 | size));
+        }
+        else if (size <= 0xffff)
         {
             serializedObj_.emplace_back((uint8_t)format_t::map16);
             for (auto i = sizeof(uint16_t); i > 0; --i)
             {
-                serializedObj_.emplace_back(uint8_t(map.size() >> (8 * (i - 1)) & 0xff));
+                serializedObj_.emplace_back(uint8_t(size >> (8 * (i - 1)) & 0xff));
             }
         }
-        else if (map.size() < std::numeric_limits<uint32_t>::max())
+        else if (size <= 0xffffffff)
         {
             serializedObj_.emplace_back((uint8_t)format_t::map32);
             for (auto i = sizeof(uint32_t); i > 0; --i)
             {
-                serializedObj_.emplace_back(uint8_t(map.size() >> (8 * (i - 1)) & 0xff));
+                serializedObj_.emplace_back(uint8_t(size >> (8 * (i - 1)) & 0xff));
             }
         }
+        else
+        {
+            return;
+        }
+
         for (auto &item : map)
         {
             pack_type(std::get<0>(item));
@@ -422,7 +441,7 @@ private:
             break;
         case sol::type::number:
             obj.push();
-            if (lua_isinteger(obj.lua_state(), -1)) // 如果是整数
+            if (lua_isinteger(obj.lua_state(), -1))
             {
                 pack_type(obj.template as<int64_t>());
             }
@@ -455,12 +474,9 @@ private:
         }
     }
 
-
-
 private:
     std::bitset<8> to_binary(int8_t value)
     {
-        // C++20: signed→unsigned conversion is well-defined two's complement
         return {static_cast<uint8_t>(value)};
     }
 
@@ -483,431 +499,451 @@ private:
     std::vector<uint8_t> serializedObj_;
 };
 
+// ----- pack_type specializations (with fix types) -----
 
 template <>
 inline void Packer::pack_type(const int8_t &value)
 {
-	serializedObj_.emplace_back((uint8_t)format_t::int8);
-	serializedObj_.emplace_back(uint8_t(to_binary(value).to_ulong())); // 拿到一个与bitset 相通位的一个数字 方便存储
+    if (value >= -32 && value <= -1)
+    {
+        // negative fixint
+        serializedObj_.emplace_back(uint8_t(0xe0 + 32 + value));
+    }
+    else if (value >= 0 && value <= 0x7f)
+    {
+        // positive fixint
+        serializedObj_.emplace_back(uint8_t(value));
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::int8);
+        serializedObj_.emplace_back(uint8_t(value));
+    }
 }
 
 template <>
 inline void Packer::pack_type(const int16_t &value)
 {
-	if (value <= std::numeric_limits<int8_t>::max() && value >= std::numeric_limits<int8_t>::min())
-	{
-		pack_type(int8_t(value));
-	}
-	else
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::int16);
-		auto serialize_val = uint16_t(to_binary(value).to_ulong());
-		for (int i = sizeof(value); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
-		}
-	}
+    if (value <= std::numeric_limits<int8_t>::max() && value >= std::numeric_limits<int8_t>::min())
+    {
+        pack_type(int8_t(value));
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::int16);
+        auto serialize_val = uint16_t(to_binary(value).to_ulong());
+        for (int i = sizeof(value); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
+        }
+    }
 }
 
 template <>
 inline void Packer::pack_type(const int32_t &value)
 {
-	if (value <= std::numeric_limits<int16_t>::max() && value >= std::numeric_limits<int16_t>::min())
-	{
-		pack_type((int16_t)value);
-	}
-	else
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::int32);
-		auto serialize_val = uint32_t(to_binary(value).to_ulong());
-		for (int i = sizeof(value); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
-		}
-	}
+    if (value <= std::numeric_limits<int16_t>::max() && value >= std::numeric_limits<int16_t>::min())
+    {
+        pack_type((int16_t)value);
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::int32);
+        auto serialize_val = uint32_t(to_binary(value).to_ulong());
+        for (int i = sizeof(value); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
+        }
+    }
 }
 
 template <>
 inline void Packer::pack_type(const int64_t &value)
 {
-	if (value <= std::numeric_limits<int32_t>::max() && value >= std::numeric_limits<int32_t>::min())
-	{
-		pack_type((int32_t)value);
-	}
-	else
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::int64);
-		auto serialize_val = uint64_t(to_binary(value).to_ullong());
-		for (int i = sizeof(value); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
-		}
-	}
+    if (value <= std::numeric_limits<int32_t>::max() && value >= std::numeric_limits<int32_t>::min())
+    {
+        pack_type((int32_t)value);
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::int64);
+        auto serialize_val = uint64_t(to_binary(value).to_ullong());
+        for (int i = sizeof(value); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(serialize_val >> (8 * (i - 1)) & 0xff));
+        }
+    }
 }
 
 template <>
 inline void Packer::pack_type(const uint8_t &value)
 {
-	serializedObj_.emplace_back((uint8_t)format_t::uint8);
-	serializedObj_.emplace_back(value);
+    if (value <= 0x7f)
+    {
+        // positive fixint
+        serializedObj_.emplace_back(value);
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::uint8);
+        serializedObj_.emplace_back(value);
+    }
 }
 
 template <>
 inline void Packer::pack_type(const uint16_t &value)
 {
-	if (value > std::numeric_limits<uint8_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::uint16);
-		for (auto i = sizeof(value); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(value >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else
-	{
-		pack_type(uint8_t(value));
-	}
+    if (value > std::numeric_limits<uint8_t>::max())
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::uint16);
+        for (auto i = sizeof(value); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(value >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else
+    {
+        pack_type(uint8_t(value));
+    }
 }
 
 template <>
 inline void Packer::pack_type(const uint32_t &value)
 {
-	if (value > std::numeric_limits<uint16_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::uint32);
-		for (auto i = sizeof(value); i > 0U; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(value >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else
-	{
-		pack_type(uint16_t(value));
-	}
+    if (value > std::numeric_limits<uint16_t>::max())
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::uint32);
+        for (auto i = sizeof(value); i > 0U; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(value >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else
+    {
+        pack_type(uint16_t(value));
+    }
 }
 
 template <>
 inline void Packer::pack_type(const uint64_t &value)
 {
-	if (value > std::numeric_limits<uint32_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::uint64);
-		for (auto i = sizeof(value); i > 0U; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(value >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else
-	{
-		pack_type(uint32_t(value));
-	}
+    if (value > std::numeric_limits<uint32_t>::max())
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::uint64);
+        for (auto i = sizeof(value); i > 0U; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(value >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else
+    {
+        pack_type(uint32_t(value));
+    }
 }
 
 template <>
-inline void Packer::pack_type(const float &value) 
+inline void Packer::pack_type(const float &value)
 {
-	int32_t i = (int32_t)value;
-	if (float(i) == value) 
-	{
-		pack_type(i);
-	}
-	else 
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::float32);
-		uint8_t *s = (uint8_t *)&value;
-		for (auto i = 0; i < sizeof(float); ++i) 
-		{
-			serializedObj_.emplace_back(s[i]);
-		}
-	}
+    int32_t i = (int32_t)value;
+    if (float(i) == value)
+    {
+        pack_type(i);
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::float32);
+        uint8_t *s = (uint8_t *)&value;
+        for (auto i = 0; i < sizeof(float); ++i)
+        {
+            serializedObj_.emplace_back(s[i]);
+        }
+    }
 }
 
 template <>
-inline void Packer::pack_type(const double &value) 
+inline void Packer::pack_type(const double &value)
 {
-	int64_t i = (int64_t)value;
-	if (double(i) == value) 
-	{
-		pack_type(i);
-	}
-	else
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::float64);
-		uint8_t *s = (uint8_t *)&value;
-		for (auto i = 0; i < sizeof(double); ++i)
-		{
-			serializedObj_.emplace_back(s[i]);
-		}
-	}
-}
-
-
-
-template<>
-inline void Packer::pack_type(const std::nullptr_t& none)
-{
-	serializedObj_.emplace_back((uint8_t)format_t::nil);
+    int64_t i = (int64_t)value;
+    if (double(i) == value)
+    {
+        pack_type(i);
+    }
+    else
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::float64);
+        uint8_t *s = (uint8_t *)&value;
+        for (auto i = 0; i < sizeof(double); ++i)
+        {
+            serializedObj_.emplace_back(s[i]);
+        }
+    }
 }
 
 template <>
-inline void Packer::pack_type(const bool &value) 
+inline void Packer::pack_type(const std::nullptr_t &none)
 {
-	if (value) 
-		serializedObj_.emplace_back((uint8_t)format_t::true_bool);
-	else 
-		serializedObj_.emplace_back((uint8_t)format_t::false_bool);
+    serializedObj_.emplace_back((uint8_t)format_t::nil);
 }
 
 template <>
-inline void Packer::pack_type(const std::string& str)
+inline void Packer::pack_type(const bool &value)
 {
-	if (str.size() < std::numeric_limits<uint8_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::str8);
-		serializedObj_.emplace_back(uint8_t(str.size()));
-	}
-	else if (str.size() < std::numeric_limits<uint16_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::str16);
-		for (auto i = sizeof(uint16_t); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(str.size() >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else if (str.size() < std::numeric_limits<uint32_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::str32);
-		for (auto i = sizeof(uint32_t); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(str.size() >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else 
-	{
-		return;
-	}
-
-	for (const auto& c : str)
-	{
-		serializedObj_.emplace_back(uint8_t(c));
-	}
+    if (value)
+        serializedObj_.emplace_back((uint8_t)format_t::true_bool);
+    else
+        serializedObj_.emplace_back((uint8_t)format_t::false_bool);
 }
 
-
-template<>
-inline void Packer::pack_type(const std::vector<uint8_t>& data)
+template <>
+inline void Packer::pack_type(const std::string &str)
 {
-	if (data.size() < std::numeric_limits<uint8_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::bin8);
-		serializedObj_.emplace_back((uint8_t)data.size());
-	}
-	else if (data.size() < std::numeric_limits<uint16_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::bin16);
-		for (int i = sizeof(uint16_t); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(data.size() >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else if (data.size() < std::numeric_limits<uint32_t>::max())
-	{
-		serializedObj_.emplace_back((uint8_t)format_t::bin32);
-		for (int i = sizeof(uint32_t); i > 0; --i)
-		{
-			serializedObj_.emplace_back(uint8_t(data.size() >> (8 * (i - 1)) & 0xff));
-		}
-	}
-	else 
-	{
-		return;
-	}
+    const size_t len = str.size();
 
-	for (const auto& b : data)
-	{
-		serializedObj_.emplace_back(b);
-	}
+    if (len <= 31)
+    {
+        // fixstr
+        serializedObj_.emplace_back(uint8_t(0xa0 | len));
+    }
+    else if (len <= 0xff)
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::str8);
+        serializedObj_.emplace_back(uint8_t(len));
+    }
+    else if (len <= 0xffff)
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::str16);
+        for (auto i = sizeof(uint16_t); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(len >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else if (len <= 0xffffffff)
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::str32);
+        for (auto i = sizeof(uint32_t); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(len >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else
+    {
+        return; // too long
+    }
+
+    for (const auto &c : str)
+    {
+        serializedObj_.emplace_back(uint8_t(c));
+    }
 }
 
+template <>
+inline void Packer::pack_type(const std::vector<uint8_t> &data)
+{
+    if (data.size() < std::numeric_limits<uint8_t>::max())
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::bin8);
+        serializedObj_.emplace_back((uint8_t)data.size());
+    }
+    else if (data.size() < std::numeric_limits<uint16_t>::max())
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::bin16);
+        for (int i = sizeof(uint16_t); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(data.size() >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else if (data.size() < std::numeric_limits<uint32_t>::max())
+    {
+        serializedObj_.emplace_back((uint8_t)format_t::bin32);
+        for (int i = sizeof(uint32_t); i > 0; --i)
+        {
+            serializedObj_.emplace_back(uint8_t(data.size() >> (8 * (i - 1)) & 0xff));
+        }
+    }
+    else
+    {
+        return;
+    }
 
-template<typename... Args>
-std::vector<uint8_t> pack(Args& ...args)
+    for (const auto &b : data)
+    {
+        serializedObj_.emplace_back(b);
+    }
+}
+
+// ----- free pack functions -----
+
+template <typename... Args>
+std::vector<uint8_t> pack(Args &...args)
 {
     auto packer = Packer{};
     auto args_tuple = std::forward_as_tuple(std::forward<Args>(args)...);
-    for_each(args_tuple, [&](auto& obj)
-    {
-        if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
-        {
-            for (int i = 0; i < obj.size(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
-        {
-            for (int i = 0; i < obj.return_count(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
-        {
-            obj.pack(packer);
-        }
-        else
-        {
-            packer(obj);
-        }
-    });
+    for_each(args_tuple, [&](auto &obj)
+             {
+                 if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
+                 {
+                     for (int i = 0; i < obj.size(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
+                 {
+                     for (int i = 0; i < obj.return_count(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
+                 {
+                     obj.pack(packer);
+                 }
+                 else
+                 {
+                     packer(obj);
+                 }
+             });
     return std::move(packer.move());
 }
 
-
-
-
-template<typename... Args>
-std::vector<uint8_t> pack(Args&& ...args)
+template <typename... Args>
+std::vector<uint8_t> pack(Args &&...args)
 {
     auto packer = Packer{};
     auto args_tuple = std::forward_as_tuple(std::forward<Args>(args)...);
-    for_each(args_tuple, [&](auto& obj)
-    {
-        if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
-        {
-            for (int i = 0; i < obj.size(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
-        {
-            for (int i = 0; i < obj.return_count(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
-        {
-            obj.pack(packer);
-        }
-        else
-        {
-            packer(obj);
-        }
-    });
+    for_each(args_tuple, [&](auto &obj)
+             {
+                 if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
+                 {
+                     for (int i = 0; i < obj.size(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
+                 {
+                     for (int i = 0; i < obj.return_count(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
+                 {
+                     obj.pack(packer);
+                 }
+                 else
+                 {
+                     packer(obj);
+                 }
+             });
     return std::move(packer.move());
 }
 
-
-
-template<typename... Args>
-std::vector<uint8_t> pack(std::tuple<Args...>& args)
+template <typename... Args>
+std::vector<uint8_t> pack(std::tuple<Args...> &args)
 {
     auto packer = Packer{};
-    for_each(std::forward<std::tuple<Args...>>(args), [&](auto& obj)
-    {
-        if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
-        {
-            for (int i = 0; i < obj.size(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
-        {
-            for (int i = 0; i < obj.return_count(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
-        {
-            obj.pack(packer);
-        }
-        else
-        {
-            packer(obj);
-        }
-    });
+    for_each(std::forward<std::tuple<Args...>>(args), [&](auto &obj)
+             {
+                 if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
+                 {
+                     for (int i = 0; i < obj.size(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
+                 {
+                     for (int i = 0; i < obj.return_count(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
+                 {
+                     obj.pack(packer);
+                 }
+                 else
+                 {
+                     packer(obj);
+                 }
+             });
     return std::move(packer.move());
 }
 
-template<typename... Args>
-std::vector<uint8_t> pack(std::tuple<Args...>&& args)
+template <typename... Args>
+std::vector<uint8_t> pack(std::tuple<Args...> &&args)
 {
     auto packer = Packer{};
-    for_each(std::forward<std::tuple<Args...>>(args), [&](auto& obj)
-    {
-        if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
-        {
-            for (int i = 0; i < obj.size(); i++)
-            {
-                packer(obj[i]);
-            }
-        }
-        else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
-        {
-			for (int i = 0; i < obj.retuen_count(); i++)
-			{
-			   packer(obj[i]);
-			}
-        }
-        else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
-        {
-            obj.pack(packer);
-        }
-        else
-        {
-            packer(obj);
-        }
-    });
+    for_each(std::forward<std::tuple<Args...>>(args), [&](auto &obj)
+             {
+                 if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::variadic_args>::value)
+                 {
+                     for (int i = 0; i < obj.size(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (std::is_same<typename std::decay<decltype(obj)>::type, sol::protected_function_result>::value)
+                 {
+                     for (int i = 0; i < obj.return_count(); i++)
+                     {
+                         packer(obj[i]);
+                     }
+                 }
+                 else if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
+                 {
+                     obj.pack(packer);
+                 }
+                 else
+                 {
+                     packer(obj);
+                 }
+             });
     return std::move(packer.move());
 }
-
 
 std::vector<uint8_t> pack(sol::variadic_args &args);
 std::vector<uint8_t> pack(sol::variadic_args &&args);
 std::vector<uint8_t> pack(sol::protected_function_result &args);
 std::vector<uint8_t> pack(sol::protected_function_result &&args);
 
-
-
+// ----- Unpacker -----
 
 class Unpacker
 {
-
 public:
-    Unpacker():dataPointer_(nullptr),dataEnd_(nullptr){}
-    Unpacker(const uint8_t* dataStart, std::size_t size) : dataPointer_(dataStart) ,dataEnd_(dataStart+size){};
+    Unpacker() : dataPointer_(nullptr), dataEnd_(nullptr) {}
+    Unpacker(const uint8_t *dataStart, std::size_t size) : dataPointer_(dataStart), dataEnd_(dataStart + size) {}
+
 public:
     std::error_code ec{};
+
 public:
-    template<typename... Types>
-    void operator()(Types& ...args)
+    template <typename... Types>
+    void operator()(Types &...args)
     {
-        (unpack_type(std::forward<Types&>(args)), ...);
+        (unpack_type(std::forward<Types &>(args)), ...);
     }
 
-    template<typename... Types>
-    void process(Types& ...args)
+    template <typename... Types>
+    void process(Types &...args)
     {
-        (unpack_type(std::forward<Types&>(args)), ...);
+        (unpack_type(std::forward<Types &>(args)), ...);
     }
-    
-    void set_data(const uint8_t* start, std::size_t size)
+
+    void set_data(const uint8_t *start, std::size_t size)
     {
         dataPointer_ = start;
         dataEnd_ = start + size;
     }
 
-    bool empty() 
+    bool empty()
     {
         return dataEnd_ - dataPointer_ <= 0;
     }
 
 private:
-
     uint8_t safe_data()
     {
         if (dataPointer_ < dataEnd_)
@@ -929,42 +965,37 @@ private:
         }
     }
 
-    //template<typename T>
-    //void unpack_type(T& value)
-    //{
-    //    if constexpr (std::is_enum<typename std::decay<T>::type>::value)
-    //    {
-    //        int32_t v = 0;
-    //        unpack_type(v);
-    //        value = (T)v;
-    //    }
-
-    //}
-
-	template <class T>
-    void unpack_type(T &value) 
+    template <class T>
+    void unpack_type(T &value)
     {
         if constexpr (std::is_enum<typename std::decay<T>::type>::value)
         {
             int32_t v = 0;
             unpack_type(v);
             value = (T)v;
-        } else if constexpr (is_map<typename std::decay<T>::type>::value)
+        }
+        else if constexpr (is_map<typename std::decay<T>::type>::value)
         {
             unpack_map(value);
-        } else if constexpr (is_containe<typename std::decay<T>::type>::value)
+        }
+        else if constexpr (is_containe<typename std::decay<T>::type>::value)
         {
             unpack_array(value);
-        } else if constexpr (is_stdarray<typename std::decay<T>::type>::value) 
+        }
+        else if constexpr (is_stdarray<typename std::decay<T>::type>::value)
         {
             unpack_stdarray(value);
-        } else if constexpr (is_stack_proxy<typename std::decay<T>::type>::value)
+        }
+        else if constexpr (is_stack_proxy<typename std::decay<T>::type>::value)
         {
-             unpack_stack_proxy(value);
-        } else if constexpr (std::is_arithmetic_v<typename std::decay<T>::type>)
+            unpack_stack_proxy(value);
+        }
+        else if constexpr (std::is_arithmetic_v<typename std::decay<T>::type>)
         {
             unpack_number(value);
-        } else {
+        }
+        else
+        {
             if constexpr (has_pack<typename std::decay<T>::type>::value)
             {
                 value.unpack(*this);
@@ -972,8 +1003,8 @@ private:
         }
     }
 
-    template<class Clock,class Duration>
-    void unpack_type(std::chrono::time_point<Clock, Duration>& value)
+    template <class Clock, class Duration>
+    void unpack_type(std::chrono::time_point<Clock, Duration> &value)
     {
         using RepType = typename std::chrono::time_point<Clock, Duration>::rep;
         using DurationType = Duration;
@@ -982,35 +1013,52 @@ private:
         unpack_type(placeholder);
         value = TimepointType(DurationType(placeholder));
     }
-    
-    template<class T>
-    void unpack_array(T& array)
+
+    template <class T>
+    void unpack_array(T &array)
     {
         using ValueType = typename T::value_type;
-        if (safe_data() == (uint8_t)format_t::array32)
+        uint8_t byte = safe_data();
+
+        if (byte >= 0x90 && byte <= 0x9f)
         {
+            // fixarray
+            std::size_t array_size = byte & 0x0f;
             safe_incremen();
-            std::size_t array_size = 0;
-            for (auto i = sizeof(uint32_t); i > 0; --i)
-            {
-                array_size += uint32_t(safe_data()) << 8 * (i-1);
-                safe_incremen();
-            }
             if constexpr (requires { array.reserve(std::size_t{}); })
             {
                 if (array_size)
-                {
                     array.reserve(array_size);
-                }
             }
-            for (auto i = 0; i < array_size; ++i)
+            for (std::size_t i = 0; i < array_size; ++i)
             {
                 ValueType val{};
                 unpack_type(val);
                 array.emplace_back(val);
             }
         }
-        else if (safe_data() == (uint8_t)format_t::array16)
+        else if (byte == (uint8_t)format_t::array32)
+        {
+            safe_incremen();
+            std::size_t array_size = 0;
+            for (auto i = sizeof(uint32_t); i > 0; --i)
+            {
+                array_size += uint32_t(safe_data()) << 8 * (i - 1);
+                safe_incremen();
+            }
+            if constexpr (requires { array.reserve(std::size_t{}); })
+            {
+                if (array_size)
+                    array.reserve(array_size);
+            }
+            for (std::size_t i = 0; i < array_size; ++i)
+            {
+                ValueType val{};
+                unpack_type(val);
+                array.emplace_back(val);
+            }
+        }
+        else if (byte == (uint8_t)format_t::array16)
         {
             safe_incremen();
             std::size_t array_size = 0;
@@ -1021,19 +1069,17 @@ private:
             }
             if constexpr (requires { array.reserve(std::size_t{}); })
             {
-                if (array_size > 0)
-                {
+                if (array_size)
                     array.reserve(array_size);
-                }
             }
-            for (auto i = 0; i < array_size; ++i)
+            for (std::size_t i = 0; i < array_size; ++i)
             {
                 ValueType val{};
                 unpack_type(val);
                 array.emplace_back(val);
             }
         }
-        else if (safe_data() == (uint8_t)format_t::table)
+        else if (byte == (uint8_t)format_t::table)
         {
             safe_incremen();
             std::size_t table_size = 0;
@@ -1042,14 +1088,13 @@ private:
                 table_size += uint32_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            // table format uses array[key-1] — only for random-access containers
-            if constexpr (requires { std::declval<T&>()[std::declval<int64_t>()]; })
+            if constexpr (requires { std::declval<T &>()[std::declval<int64_t>()]; })
             {
                 if (table_size > 0)
                 {
                     array.resize(table_size);
                 }
-                for (auto i = 0; i < table_size; ++i)
+                for (std::size_t i = 0; i < table_size; ++i)
                 {
                     int64_t key{};
                     ValueType val{};
@@ -1061,26 +1106,14 @@ private:
         }
         else
         {
-            std::size_t array_size = safe_data() & 0b00001111;
-            safe_incremen();
-            if constexpr (requires { array.reserve(std::size_t{}); })
-            {
-                if (array_size)
-                {
-                    array.reserve(array_size);
-                }
-            }
-            for (auto i = 0; i < array_size; ++i)
-			{
-                ValueType val{};
-                unpack_type(val);
-                array.emplace_back(val);
-			}
+            // Unknown array type, but we may fallback to fixarray already handled.
+            // In standard msgpack, only fixarray, array16, array32 exist.
+            ec = make_error_code(UnPackErrorType::eOutRange);
         }
     }
 
-    template<typename T>
-    void unpack_stdarray(T& array)
+    template <typename T>
+    void unpack_stdarray(T &array)
     {
         using ValueType = typename T::value_type;
         auto vec = std::vector<ValueType>{};
@@ -1088,12 +1121,33 @@ private:
         std::copy(vec.begin(), vec.end(), array.begin());
     }
 
-    template<typename T>
-    void unpack_map(T& map)
+    template <typename T>
+    void unpack_map(T &map)
     {
         using KeyType = typename T::key_type;
         using MappedType = typename T::mapped_type;
-        if (safe_data() == (uint8_t)format_t::map32 || safe_data() == (uint8_t)format_t::table)
+        uint8_t byte = safe_data();
+
+        if (byte >= 0x80 && byte <= 0x8f)
+        {
+            // fixmap
+            std::size_t map_size = byte & 0x0f;
+            safe_incremen();
+            if constexpr (requires { map.reserve(std::size_t{}); })
+            {
+                if (map_size)
+                    map.reserve(map_size);
+            }
+            for (std::size_t i = 0; i < map_size; ++i)
+            {
+                KeyType key{};
+                MappedType val{};
+                unpack_type(key);
+                unpack_type(val);
+                map.insert_or_assign(key, val);
+            }
+        }
+        else if (byte == (uint8_t)format_t::map32 || byte == (uint8_t)format_t::table)
         {
             safe_incremen();
             std::size_t map_size = 0;
@@ -1105,11 +1159,9 @@ private:
             if constexpr (requires { map.reserve(std::size_t{}); })
             {
                 if (map_size)
-                {
                     map.reserve(map_size);
-                }
             }
-            for (auto i = 0; i < map_size; ++i)
+            for (std::size_t i = 0; i < map_size; ++i)
             {
                 KeyType key{};
                 MappedType val{};
@@ -1118,7 +1170,7 @@ private:
                 map.insert_or_assign(key, val);
             }
         }
-        else if (safe_data() == (uint8_t)format_t::map16)
+        else if (byte == (uint8_t)format_t::map16)
         {
             safe_incremen();
             std::size_t map_size = 0;
@@ -1130,11 +1182,9 @@ private:
             if constexpr (requires { map.reserve(std::size_t{}); })
             {
                 if (map_size)
-                {
                     map.reserve(map_size);
-                }
             }
-            for (auto i = 0; i < map_size; ++i)
+            for (std::size_t i = 0; i < map_size; ++i)
             {
                 KeyType key{};
                 MappedType val{};
@@ -1142,18 +1192,16 @@ private:
                 unpack_type(val);
                 map.insert_or_assign(key, val);
             }
-
         }
     }
 
- 
-    template<typename T>
-    void unpack_stack_proxy(T& state)
+    template <typename T>
+    void unpack_stack_proxy(T &state)
     {
         uint8_t byte = safe_data();
         switch (byte)
         {
-        case(uint8_t)format_t::nil:
+        case (uint8_t)format_t::nil:
         {
             lua_pushnil(state.lua_state());
             safe_incremen();
@@ -1177,7 +1225,7 @@ private:
         {
             std::vector<uint8_t> value;
             unpack_type(value);
-            lua_pushlstring(state.lua_state(), (char*)(value.data()), value.size());
+            lua_pushlstring(state.lua_state(), (char *)(value.data()), value.size());
             break;
         }
         case (uint8_t)format_t::float32:
@@ -1232,46 +1280,59 @@ private:
             unpack_table(state);
             break;
         }
-
         default:
         {
-            if (byte >= 0 && byte <= 31)        //32bit之内
+            if (byte >= 0x00 && byte <= 0x7f)
             {
-                uint8_t value = 0;
-                unpack_type(value);
+                // positive fixint
+                uint8_t value = byte;
+                safe_incremen();
                 lua_pushinteger(state.lua_state(), value);
             }
-            else if (byte >= 128 && byte < 160)
+            else if (byte >= 0xe0 && byte <= 0xff)
             {
+                // negative fixint
+                int8_t value = static_cast<int8_t>(byte);
+                safe_incremen();
+                lua_pushinteger(state.lua_state(), value);
+            }
+            else if (byte >= 0x90 && byte <= 0x9f)
+            {
+                // fixarray
                 unpack_table(state);
             }
-            else if (byte >= 160 && byte < 192)
+            else if (byte >= 0x80 && byte <= 0x8f)
             {
+                // fixmap
+                unpack_table(state);
+            }
+            else if (byte >= 0xa0 && byte <= 0xbf)
+            {
+                // fixstr
                 std::size_t strSize = byte & 0b00011111;
                 safe_incremen();
-				if (dataPointer_ + strSize <= dataEnd_) 
+                if (dataPointer_ + strSize <= dataEnd_)
                 {
-					lua_pushlstring(state.lua_state(), (char *)(dataPointer_), strSize);
+                    lua_pushlstring(state.lua_state(), (char *)(dataPointer_), strSize);
                     safe_incremen(strSize);
-				} else 
+                }
+                else
                 {
                     ec = UnPackErrorType::eOutRange;
-				}
+                }
             }
-            else 
+            else
             {
-                int8_t value = 0;
-				unpack_type(value);
-				lua_pushinteger(state.lua_state(), value);
+                // unknown
+                ec = make_error_code(UnPackErrorType::eOutRange);
             }
             break;
         }
         }
     }
-    
-    
-    template<typename T>
-    void unpack_table(T& state)
+
+    template <typename T>
+    void unpack_table(T &state)
     {
         uint8_t byte = safe_data();
         if (byte == (uint8_t)format_t::array32)
@@ -1284,7 +1345,7 @@ private:
                 array_size += uint32_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            for (auto i = 0; i < array_size; ++i)
+            for (std::size_t i = 0; i < array_size; ++i)
             {
                 unpack_stack_proxy(state);
                 lua_rawseti(state.lua_state(), -2, i + 1);
@@ -1300,7 +1361,7 @@ private:
                 array_size += uint16_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            for (auto i = 0; i < array_size; ++i)
+            for (std::size_t i = 0; i < array_size; ++i)
             {
                 unpack_stack_proxy(state);
                 lua_rawseti(state.lua_state(), -2, i + 1);
@@ -1313,22 +1374,52 @@ private:
             std::size_t map_size = 0;
             for (auto i = sizeof(uint32_t); i > 0; --i)
             {
-                map_size += uint32_t(safe_data()) << 8 * (i-1);
+                map_size += uint32_t(safe_data()) << 8 * (i - 1);
                 safe_incremen();
             }
-            for (auto i = 0; i < map_size; ++i)
+            for (std::size_t i = 0; i < map_size; ++i)
             {
                 unpack_stack_proxy(state);
                 unpack_stack_proxy(state);
                 lua_rawset(state.lua_state(), -3);
             }
         }
-        else if(byte == 144)
+        else if (byte == (uint8_t)format_t::map16)
         {
             lua_newtable(state.lua_state());
-            std::size_t map_size = safe_data() & 0b00001111;
             safe_incremen();
-            for (auto i = 0; i < map_size; ++i)
+            std::size_t map_size = 0;
+            for (auto i = sizeof(uint16_t); i > 0; --i)
+            {
+                map_size += uint16_t(safe_data()) << 8 * (i - 1);
+                safe_incremen();
+            }
+            for (std::size_t i = 0; i < map_size; ++i)
+            {
+                unpack_stack_proxy(state);
+                unpack_stack_proxy(state);
+                lua_rawset(state.lua_state(), -3);
+            }
+        }
+        else if (byte >= 0x90 && byte <= 0x9f)
+        {
+            // fixarray
+            lua_newtable(state.lua_state());
+            std::size_t array_size = byte & 0x0f;
+            safe_incremen();
+            for (std::size_t i = 0; i < array_size; ++i)
+            {
+                unpack_stack_proxy(state);
+                lua_rawseti(state.lua_state(), -2, i + 1);
+            }
+        }
+        else if (byte >= 0x80 && byte <= 0x8f)
+        {
+            // fixmap
+            lua_newtable(state.lua_state());
+            std::size_t map_size = byte & 0x0f;
+            safe_incremen();
+            for (std::size_t i = 0; i < map_size; ++i)
             {
                 unpack_stack_proxy(state);
                 unpack_stack_proxy(state);
@@ -1337,342 +1428,359 @@ private:
         }
         else
         {
-            lua_newtable(state.lua_state());
-            std::size_t map_size = safe_data() & 0b00001111;
-            safe_incremen();
-            for (auto i = 0; i < map_size; ++i)
-            {
-                unpack_stack_proxy(state);
-                lua_rawseti(state.lua_state(), -2,i+1);
-            }
+            // unknown
+            ec = make_error_code(UnPackErrorType::eOutRange);
         }
     }
 
-    template<typename T>
-    void unpack_number(T& val)
+    template <typename T>
+    void unpack_number(T &val)
     {
         if constexpr (std::is_arithmetic<T>::value)
         {
-            // fixint: 0x00-0x7f positive, 0xe0-0xff negative
-            if (safe_data() <= 0x7f)
+            uint8_t byte = safe_data();
+
+            // fixint positive
+            if (byte <= 0x7f)
             {
-                val = static_cast<T>(safe_data());
+                val = static_cast<T>(byte);
                 safe_incremen();
+                return;
             }
-            else if (safe_data() >= 0xe0)
+            // fixint negative
+            if (byte >= 0xe0)
             {
-                val = static_cast<T>(static_cast<int8_t>(safe_data()));
+                val = static_cast<T>(static_cast<int8_t>(byte));
                 safe_incremen();
+                return;
             }
-            else if (safe_data() == (uint8_t)format_t::uint64)
+
+            // otherwise check typed markers
+            if (byte == (uint8_t)format_t::uint64)
             {
                 uint64_t value = 0;
                 safe_incremen();
-                for (auto i = sizeof(uint64_t); i > 0; --i) {
+                for (auto i = sizeof(uint64_t); i > 0; --i)
+                {
                     value += uint64_t(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
-                val = (T)(value);
+                val = static_cast<T>(value);
             }
-            else if (safe_data() == (uint8_t)format_t::uint32)
+            else if (byte == (uint8_t)format_t::uint32)
             {
                 uint32_t value = 0;
                 safe_incremen();
-                for (auto i = sizeof(uint32_t); i > 0; --i) {
+                for (auto i = sizeof(uint32_t); i > 0; --i)
+                {
                     value += uint32_t(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
-                val = (T)(value);
+                val = static_cast<T>(value);
             }
-            else if (safe_data() == (uint8_t)format_t::uint16)
+            else if (byte == (uint8_t)format_t::uint16)
             {
                 uint16_t value = 0;
                 safe_incremen();
-                for (auto i = sizeof(uint16_t); i > 0; --i) {
+                for (auto i = sizeof(uint16_t); i > 0; --i)
+                {
                     value += uint16_t(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
-                val = (T)(value);
+                val = static_cast<T>(value);
             }
-            else if (safe_data() == (uint8_t)format_t::uint8)
+            else if (byte == (uint8_t)format_t::uint8)
             {
                 uint8_t value = 0;
                 safe_incremen();
                 value = safe_data();
                 safe_incremen();
-                val = (T)(value);
+                val = static_cast<T>(value);
             }
-            else if (safe_data() == (uint8_t)format_t::int64) 
+            else if (byte == (uint8_t)format_t::int64)
             {
                 int64_t value = 0;
                 safe_incremen();
                 std::bitset<64> bits;
-                for (auto i = sizeof(value); i > 0; --i) {
+                for (auto i = sizeof(value); i > 0; --i)
+                {
                     bits |= std::bitset<8>(safe_data()).to_ullong() << 8 * (i - 1);
                     safe_incremen();
                 }
-                if (bits[63]) {
+                if (bits[63])
                     value = -1 * ((~bits).to_ullong() + 1);
-                } else {
+                else
                     value = bits.to_ullong();
-                }
-                val = (T)(value);
-            } 
-            else if (safe_data() == (uint8_t)format_t::int32) 
+                val = static_cast<T>(value);
+            }
+            else if (byte == (uint8_t)format_t::int32)
             {
                 int32_t value = 0;
                 safe_incremen();
                 std::bitset<32> bits;
-                for (auto i = sizeof(uint32_t); i > 0; --i) 
+                for (auto i = sizeof(uint32_t); i > 0; --i)
                 {
                     bits |= static_cast<unsigned long long>(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
-                if (bits[31]) {
+                if (bits[31])
                     value = -1 * ((~bits).to_ulong() + 1);
-                } else {
+                else
                     value = bits.to_ulong();
-                }
-                val = (T)(value);
-            } else if (safe_data() == (uint8_t)format_t::int16) 
+                val = static_cast<T>(value);
+            }
+            else if (byte == (uint8_t)format_t::int16)
             {
                 int16_t value = 0;
                 safe_incremen();
                 std::bitset<16> bits;
-                for (auto i = sizeof(uint16_t); i > 0; --i) 
+                for (auto i = sizeof(uint16_t); i > 0; --i)
                 {
                     bits |= static_cast<unsigned long long>(safe_data()) << 8 * (i - 1);
                     safe_incremen();
                 }
-                if (bits[15]) {
+                if (bits[15])
                     value = -1 * (uint16_t((~bits).to_ulong()) + 1);
-                } else {
+                else
                     value = uint16_t(bits.to_ulong());
-                }
-                val = (T)(value);
-            } else if (safe_data() == (uint8_t)format_t::int8) 
+                val = static_cast<T>(value);
+            }
+            else if (byte == (uint8_t)format_t::int8)
             {
                 int8_t value = 0;
                 safe_incremen();
                 value = safe_data();
                 safe_incremen();
-                val = (T)(value);
+                val = static_cast<T>(value);
             }
-            else if (safe_data() == (uint8_t)format_t::float32) 
+            else if (byte == (uint8_t)format_t::float32)
             {
                 float value = 0.f;
                 safe_incremen();
                 uint8_t *s = (uint8_t *)&value;
-                for (auto i = 0U; i < sizeof(float); ++i) 
+                for (auto i = 0U; i < sizeof(float); ++i)
                 {
                     s[i] = safe_data();
                     safe_incremen();
                 }
-                val = (T)(value);
-            } else if (safe_data() == (uint8_t)format_t::float64) 
+                val = static_cast<T>(value);
+            }
+            else if (byte == (uint8_t)format_t::float64)
             {
-                double value = 0.f;
+                double value = 0.0;
                 safe_incremen();
                 uint8_t *s = (uint8_t *)&value;
-                for (auto i = 0U; i < sizeof(double); ++i) 
+                for (auto i = 0U; i < sizeof(double); ++i)
                 {
                     s[i] = safe_data();
                     safe_incremen();
                 }
-                val = (T)(value);
+                val = static_cast<T>(value);
+            }
+            else
+            {
+                ec = make_error_code(UnPackErrorType::eOutRange);
             }
         }
     }
-    
-
 
 private:
-    const uint8_t* dataPointer_;
-    const uint8_t* dataEnd_;
+    const uint8_t *dataPointer_;
+    const uint8_t *dataEnd_;
 };
 
-
+// ----- unpack_type specializations (delegating to unpack_number) -----
 
 template <>
-inline void Unpacker::unpack_type(int8_t &value) 
+inline void Unpacker::unpack_type(int8_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
 inline void Unpacker::unpack_type(int16_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
 inline void Unpacker::unpack_type(int32_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
-inline void Unpacker::unpack_type(int64_t &value) 
+inline void Unpacker::unpack_type(int64_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
-inline void Unpacker::unpack_type(uint8_t &value) 
+inline void Unpacker::unpack_type(uint8_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
 inline void Unpacker::unpack_type(uint16_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
 inline void Unpacker::unpack_type(uint32_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
-inline void Unpacker::unpack_type(uint64_t &value) 
+inline void Unpacker::unpack_type(uint64_t &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
-inline void Unpacker::unpack_type(std::nullptr_t & /*value*/) 
+inline void Unpacker::unpack_type(std::nullptr_t & /*value*/)
 {
-	safe_incremen();
+    safe_incremen(); // nil marker consumed
 }
-
 template <>
-inline void Unpacker::unpack_type(bool &value) 
+inline void Unpacker::unpack_type(bool &value)
 {
-	if (safe_data() == (uint8_t)format_t::false_bool)
-	{
-		value = false;
-		safe_incremen();
-	} else if (safe_data() == (uint8_t)format_t::true_bool) 
-	{
-		value = true;
-		safe_incremen();
-	} else 
-	{
-		unpack_number(value);
-	}
+    if (safe_data() == (uint8_t)format_t::false_bool)
+    {
+        value = false;
+        safe_incremen();
+    }
+    else if (safe_data() == (uint8_t)format_t::true_bool)
+    {
+        value = true;
+        safe_incremen();
+    }
+    else
+    {
+        unpack_number(value);
+    }
 }
-
 template <>
 inline void Unpacker::unpack_type(float &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
 inline void Unpacker::unpack_type(double &value)
 {
-	unpack_number(value);
+    unpack_number(value);
 }
-
 template <>
 inline void Unpacker::unpack_type(std::string &value)
 {
-	std::size_t strSize = 0;
-	if (safe_data() == (uint8_t)format_t::str32)
-	{
-		safe_incremen();
-		for (auto i = sizeof(uint32_t); i > 0; --i)
-		{
-			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
-			safe_incremen();
-		}
-	} else if (safe_data() == (uint8_t)format_t::str16) 
-	{
-		safe_incremen();
-		for (auto i = sizeof(uint16_t); i > 0; --i) 
-		{
-			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
-			safe_incremen();
-		}
-	} else if (safe_data() == (uint8_t)format_t::str8)
-	{
-		safe_incremen();
-		for (auto i = sizeof(uint8_t); i > 0; --i)
-		{
-			strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
-			safe_incremen();
-		}
-	} else if (safe_data() >= (uint8_t)0xa0 && safe_data() <= (uint8_t)0xbf) {
-		strSize = safe_data() & 0b00011111;
-		safe_incremen();
-	} else {
-		return;
-	}
-	if (dataPointer_ + strSize <= dataEnd_) 
-	{
-		value = std::string{dataPointer_, dataPointer_ + strSize};
-		safe_incremen(strSize);
-	} else 
-	{
-		ec = UnPackErrorType::eOutRange;
-	}
-}
+    std::size_t strSize = 0;
+    uint8_t byte = safe_data();
 
+    if (byte >= 0xa0 && byte <= 0xbf)
+    {
+        // fixstr
+        strSize = byte & 0x1f;
+        safe_incremen();
+    }
+    else if (byte == (uint8_t)format_t::str32)
+    {
+        safe_incremen();
+        for (auto i = sizeof(uint32_t); i > 0; --i)
+        {
+            strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
+            safe_incremen();
+        }
+    }
+    else if (byte == (uint8_t)format_t::str16)
+    {
+        safe_incremen();
+        for (auto i = sizeof(uint16_t); i > 0; --i)
+        {
+            strSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
+            safe_incremen();
+        }
+    }
+    else if (byte == (uint8_t)format_t::str8)
+    {
+        safe_incremen();
+        strSize = safe_data();
+        safe_incremen();
+    }
+    else
+    {
+        ec = make_error_code(UnPackErrorType::eOutRange);
+        return;
+    }
+
+    if (dataPointer_ + strSize <= dataEnd_)
+    {
+        value = std::string{dataPointer_, dataPointer_ + strSize};
+        safe_incremen(strSize);
+    }
+    else
+    {
+        ec = make_error_code(UnPackErrorType::eOutRange);
+    }
+}
 template <>
 inline void Unpacker::unpack_type(std::vector<uint8_t> &value)
 {
-	std::size_t binSize = 0;
-	if (safe_data() == (uint8_t)format_t::bin32)
-	{
-		safe_incremen();
-		for (auto i = sizeof(uint32_t); i > 0; --i)
-		{
-			binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
-			safe_incremen();
-		}
-	}
-	else if (safe_data() == (uint8_t)format_t::bin16) 
-	{
-		safe_incremen();
-		for (auto i = sizeof(uint16_t); i > 0; --i) 
-		{
-			binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
-			safe_incremen();
-		}
-	} else 
-	{
-		safe_incremen();
-		for (auto i = sizeof(uint8_t); i > 0; --i) {
-			binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
-			safe_incremen();
-		}
-	}
-	if (dataPointer_ + binSize <= dataEnd_)
-	{
-		value = std::vector<uint8_t>{dataPointer_, dataPointer_ + binSize};
-		safe_incremen(binSize);
-	} else
-	{
-		ec = UnPackErrorType::eOutRange;
-	}
+    std::size_t binSize = 0;
+    uint8_t byte = safe_data();
+
+    if (byte == (uint8_t)format_t::bin32)
+    {
+        safe_incremen();
+        for (auto i = sizeof(uint32_t); i > 0; --i)
+        {
+            binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
+            safe_incremen();
+        }
+    }
+    else if (byte == (uint8_t)format_t::bin16)
+    {
+        safe_incremen();
+        for (auto i = sizeof(uint16_t); i > 0; --i)
+        {
+            binSize += static_cast<std::size_t>(safe_data()) << 8 * (i - 1);
+            safe_incremen();
+        }
+    }
+    else if (byte == (uint8_t)format_t::bin8)
+    {
+        safe_incremen();
+        binSize = safe_data();
+        safe_incremen();
+    }
+    else
+    {
+        ec = make_error_code(UnPackErrorType::eOutRange);
+        return;
+    }
+
+    if (dataPointer_ + binSize <= dataEnd_)
+    {
+        value = std::vector<uint8_t>{dataPointer_, dataPointer_ + binSize};
+        safe_incremen(binSize);
+    }
+    else
+    {
+        ec = make_error_code(UnPackErrorType::eOutRange);
+    }
 }
 
+// ----- free unpack functions -----
 
-template<typename... Args>
+template <typename... Args>
 std::tuple<Args...> unpack(const uint8_t *dataStart, const std::size_t size, std::error_code &ec)
 {
     auto unpacker = Unpacker(dataStart, size);
     std::tuple<Args...> objs;
-    for_each(objs, [&](auto& obj)
-	{
-		if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value) {
-			obj.unpack(unpacker);
-		} else {
-			unpacker(obj);
-		}
-	});
+    for_each(objs, [&](auto &obj)
+             {
+                 if constexpr (has_pack<typename std::decay<decltype(obj)>::type>::value)
+                 {
+                     obj.unpack(unpacker);
+                 }
+                 else
+                 {
+                     unpacker(obj);
+                 }
+             });
     ec = unpacker.ec;
     return objs;
 }
@@ -1685,14 +1793,14 @@ std::tuple<Args...> unpack(const uint8_t *dataStart, const std::size_t size)
 }
 
 template <class... Args>
-std::tuple<Args...> unpack(const std::vector<uint8_t> &data) 
+std::tuple<Args...> unpack(const std::vector<uint8_t> &data)
 {
     std::error_code ec;
     return unpack<Args...>(data.data(), data.size(), ec);
 }
 
 template <class... Args>
-std::tuple<Args...> unpack(const std::vector<uint8_t> &data, std::error_code &ec) 
+std::tuple<Args...> unpack(const std::vector<uint8_t> &data, std::error_code &ec)
 {
     return unpack<Args...>(data.data(), data.size(), ec);
 }
@@ -1716,7 +1824,3 @@ public:                                                        \
     {                                                          \
         unpacker(__VA_ARGS__);                                 \
     }
-
-
-
-
