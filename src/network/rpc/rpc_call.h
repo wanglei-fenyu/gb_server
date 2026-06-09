@@ -168,14 +168,8 @@ inline void RpcCall::SetCallBack(F f)
                 {
                     std::string s;
                     GetMsgData(meta, buffer, meta_size, data_size, s);
-                    ValueTypes values{};
-                    if (!msgpack_unpack_tuple(values, reinterpret_cast<const uint8_t*>(s.data()), s.size()))
-                    {
-                        std::apply([&](auto&&... args) {
-                            f(err, std::forward<decltype(args)>(args)...);
-                        }, ValueTypes{});
-                        return;
-                    }
+                    auto values = msgpack_unpack_tuple<ValueTypes>(
+                        reinterpret_cast<const uint8_t*>(s.data()), s.size());
                     std::apply([&](auto&&... args) {
                         f(RpcErrorCode::None, std::forward<decltype(args)>(args)...);
                     }, std::move(values));

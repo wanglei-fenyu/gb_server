@@ -295,34 +295,21 @@ void Session::Send(const Meta* meta, const ReadBufferPtr& data_buffer)
 
     header.meta_size = static_cast<int>(write_buffer.ByteCount() - header_pos - header_size);
 
-    // 直接追加原始数据到缓冲区，避免中间 string 拷贝
     if (meta->compress_type == CompressType::CompressTypeNone)
     {
-        // 直接调用 Append 的 ReadBufferPtr 重载（如果存在）
-        // 否则使用 data_buffer 构造 string_view
-        auto* buffer_raw = data_buffer.get();
-        if (buffer_raw)
-        {
-            // 复用 Send(string_view) 重载，内部只做一次 Append
-            std::string_view data_view(reinterpret_cast<const char*>(buffer_raw), buffer_raw->TotalCount());
-            write_buffer.Append(data_view.data(), static_cast<int>(data_view.size()));
-        }
+        std::string data = data_buffer->ToString();
+        write_buffer.Append(data.data(), static_cast<int>(data.size()));
     }
     else
     {
-        // 压缩路径：压缩后再追加（不可避免需要一次压缩缓冲区拷贝）
         std::string                                     compressed;
         google::protobuf::io::StringOutputStream        o(&compressed);
         std::shared_ptr<AbstractCompressedOutputStream> os(get_compressed_output_stream(&o, meta->compress_type));
         {
-            auto* buffer_raw = data_buffer.get();
-            if (buffer_raw)
-            {
-                std::string_view data_view(reinterpret_cast<const char*>(buffer_raw), buffer_raw->TotalCount());
-                google::protobuf::io::CodedOutputStream c(os.get());
-                c.WriteVarint32(data_view.size());
-                c.WriteRaw(data_view.data(), data_view.size());
-            }
+            std::string data = data_buffer->ToString();
+            google::protobuf::io::CodedOutputStream c(os.get());
+            c.WriteVarint32(data.size());
+            c.WriteString(data);
         }
         os->Flush();
         write_buffer.Append(compressed.data(), compressed.size());
