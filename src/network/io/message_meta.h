@@ -2,6 +2,7 @@
 #include "gbnet/buffer/compressed_def.h"
 #include <cstdint>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
+#include "log/log.h"
 
 namespace gb
 {
@@ -20,7 +21,9 @@ enum MsgMode : uint8_t
 /// dst_type / dst_inst 供后续 Multi-Instance 路由使用，当前未启用。
 ///
 /// 重要：sizeof(Meta) 与原始版本相同，wire format 不变。
+/// 使用 #pragma pack(1) 确保紧凑布局（1字节对齐）
 /// ═══════════════════════════════════════════════════════════════════════
+#pragma pack(push, 1)
 struct Meta
 {
     MsgMode      mode{Msg};         // 消息模式 msg rpc rpc回复
@@ -30,6 +33,7 @@ struct Meta
     uint64_t     method{0};         // rpc方法
     uint64_t     sequence{0};       // rpc序列号
 };
+#pragma pack(pop)
 
 
 
@@ -37,18 +41,18 @@ struct Meta
 inline bool ReadMeta(google::protobuf::io::ZeroCopyInputStream* input, Meta& meta, size_t meta_size) {
     const void* data = nullptr;
     int size = 0;
-    
+
     // 获取数据块
     input->Next(&data, &size);
-    
+
     std::memcpy(&meta, data, meta_size);
-    
+
     // 退回未使用的数据
     if (size > static_cast<int>(meta_size))
     {
         input->BackUp(size - static_cast<int>(meta_size));
     }
-    
+
     return true;
 }
 
