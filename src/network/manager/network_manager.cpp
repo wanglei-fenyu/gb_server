@@ -41,7 +41,7 @@ void NetworkManager::UnListen(uint32_t type, std::string signal, int level)
 void NetworkManager::Send(Session* session, uint32_t type, uint64_t id, google::protobuf::Message& msg)
 {
 	gb::Meta meta;
-	meta.entity_id = id;
+	meta.user_unique_id = id;
 	meta.type = type;
 	session->Send(&meta, &msg);
 }
@@ -49,8 +49,18 @@ void NetworkManager::Send(Session* session, uint32_t type, uint64_t id, google::
 void NetworkManager::Send(std::shared_ptr<Session> session, uint32 type, uint64_t id, google::protobuf::Message& msg)
 {
 	gb::Meta meta;
-	meta.entity_id = id;
+	meta.user_unique_id = id;
 	meta.type = type;
+	session->Send(&meta, &msg);
+}
+
+void NetworkManager::Send(Session* session, const Meta& meta, google::protobuf::Message& msg)
+{
+	session->Send(&meta, &msg);
+}
+
+void NetworkManager::Send(std::shared_ptr<Session> session, const Meta& meta, google::protobuf::Message& msg)
+{
 	session->Send(&meta, &msg);
 }
 
@@ -69,7 +79,7 @@ void NetworkManager::CallImpl(RpcCallPtr call, std::string method, uint64_t id, 
 	uint64_t method_key = MD5::MD5Hash64(method.c_str());
 	meta.method = method_key;
 	meta.mode = MsgMode::Request;
-	meta.entity_id = id;
+	meta.user_unique_id = id;
 	// sequence和call->SetId在CallImpl(Meta&, RpcCallPtr, ReadBufferPtr)内部处理
 	if (args.size() > 0)
 	{
@@ -183,9 +193,9 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         case MsgMode::Msg:
         {
             // 统一路由入口：根据 ServerApp::SetRouterPolicy 设定的策略自动走对应路径
-            //   Stateful：entity_id 精确绑定，未命中则回退 hash
+            //   Stateful：按 scene_id（优先）或 user_unique_id 精确绑定
             //   Stateless：纯 hash 路由
-            auto           executor    = router_.GetExecutor(meta.type, meta.entity_id);
+            auto           executor    = router_.GetExecutor(meta.type, meta.user_unique_id);
             net_listen_fun listen_func = FindListenFunction(meta.type);
             if (!listen_func)
                 return;
@@ -196,7 +206,7 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         }
         case MsgMode::Request:
         {
-            auto           executor  = router_.GetExecutor(meta.type, meta.entity_id);
+            auto           executor  = router_.GetExecutor(meta.type, meta.user_unique_id);
             rpc_listen_fun rpc_func = FindRpcFunction(meta.method);
             if (!rpc_func)
                 return;

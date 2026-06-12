@@ -120,7 +120,7 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
                 sol::state_view lua(handler_fn.lua_state());
                 sol::table meta_tbl = lua.create_table();
                 meta_tbl["mode"]          = static_cast<int>(meta.mode);
-                meta_tbl["entity_id"]     = meta.entity_id;
+                meta_tbl["user_unique_id"]     = meta.user_unique_id;
                 meta_tbl["type"]          = meta.type;
                 meta_tbl["method"]        = meta.method;
                 meta_tbl["sequence"]      = meta.sequence;
@@ -147,7 +147,7 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
 
                     sol::table meta_tbl = lua.create_table();
                     meta_tbl["mode"]          = static_cast<int>(meta.mode);
-                    meta_tbl["entity_id"]     = meta.entity_id;
+                    meta_tbl["user_unique_id"]     = meta.user_unique_id;
                     meta_tbl["type"]          = meta.type;
                     meta_tbl["method"]        = meta.method;
                     meta_tbl["sequence"]      = meta.sequence;
@@ -172,7 +172,7 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
 
                     sol::table meta_tbl = lua.create_table();
                     meta_tbl["mode"]          = static_cast<int>(meta.mode);
-                    meta_tbl["entity_id"]     = meta.entity_id;
+                    meta_tbl["user_unique_id"]     = meta.user_unique_id;
                     meta_tbl["type"]          = meta.type;
                     meta_tbl["method"]        = meta.method;
                     meta_tbl["sequence"]      = meta.sequence;

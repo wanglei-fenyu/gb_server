@@ -4,6 +4,7 @@
 #include "network/rpc/rpc_reply.h"
 #include "network/io/session.h"
 #include "network/io/message_meta.h"
+#include "msgpack/msgpack.hpp"
 
 NAMESPACE_BEGIN(gb)
 
@@ -18,9 +19,25 @@ void RegisterRpcLua(std::shared_ptr<Script>& scriptPtr)
     };
 
     // ── Client-side RPC call ──
-    network["Call"] = [](RpcCallPtr call, std::string method, uint64_t id, sol::variadic_args args) {
-        gb::NetworkManager::Instance()->CallImpl(call, method, id, args);
-    };
+    network["Call"] = sol::overload(
+        [](RpcCallPtr call, std::string method, uint64_t id, sol::variadic_args args) {
+            gb::NetworkManager::Instance()->CallImpl(call, method, id, args);
+        },
+        [](RpcCallPtr call, Meta meta, sol::variadic_args args) {
+            if (args.size() > 0)
+            {
+                std::vector<uint8_t> data = gb::msgpack::pack(args);
+                WriteBuffer          write_buffer;
+                write_buffer.Append((const char*)data.data(), data.size());
+                ReadBufferPtr read_buffer(new ReadBuffer());
+                write_buffer.SwapOut(read_buffer.get());
+                gb::NetworkManager::Instance()->CallImpl(meta, call, read_buffer);
+            }
+            else
+            {
+                gb::NetworkManager::Instance()->CallImpl(meta, call);
+            }
+        });
 
     // ── RpcCall usertype ──
     scriptPtr->new_usertype<RpcCall>("RpcCall",

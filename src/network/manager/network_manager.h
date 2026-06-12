@@ -38,6 +38,9 @@ public:
 	void Send(Session* session, uint32_t type, uint64_t id, google::protobuf::Message& msg);
 	void Send(std::shared_ptr<Session> session, uint32_t type, uint64_t id, google::protobuf::Message& msg);
 
+	void Send(Session* session, const Meta& meta, google::protobuf::Message& msg);
+	void Send(std::shared_ptr<Session> session, const Meta& meta, google::protobuf::Message& msg);
+
 	void ListenOption(uint32_t type, net_listen_fun f, std::string protoName);
 
 	template <typename F>
@@ -67,9 +70,30 @@ public:
 		uint64_t method_key = MD5::MD5Hash64(method.c_str());
 		meta.method = method_key;
 		meta.mode = MsgMode::Request;
-		meta.entity_id = id;
+		meta.user_unique_id = id;
 		// sequence和call->SetId在CallImpl(Meta&, RpcCallPtr, ReadBufferPtr)内部处理
 		// 用于将worker_index + local_seq编码到64位sequence字段中
+		if constexpr (sizeof...(args) > 0)
+		{
+			std::vector<uint8_t> data = gb::msgpack::pack<Args...>(std::forward<Args>(args)...);
+			WriteBuffer          write_buffer;
+			write_buffer.Append((const char*)data.data(), data.size());
+			ReadBufferPtr read_buffer(new ReadBuffer());
+			write_buffer.SwapOut(read_buffer.get());
+			CallImpl(meta, call, read_buffer);
+		}
+		else
+		{
+			CallImpl(meta, call);
+		}
+	}
+
+	template<typename ...Args>
+	void Call(RpcCallPtr call, Meta meta, Args&&... args)
+	{
+		if (!call)
+			return;
+		meta.mode = MsgMode::Request;
 		if constexpr (sizeof...(args) > 0)
 		{
 			std::vector<uint8_t> data = gb::msgpack::pack<Args...>(std::forward<Args>(args)...);

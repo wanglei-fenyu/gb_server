@@ -59,10 +59,10 @@ namespace gb
 		return GetExecutor(static_cast<uint32_t>(message_type), route_id);
 	}
 
-	WorkerExecutor Router::GetExecutor(uint32_t message_type, uint64_t entity_id) const
+	WorkerExecutor Router::GetExecutor(uint32_t message_type, uint64_t user_unique_id) const
 	{
-		// entity_id == 0：系统消息（etcd 等）→ 主线程 Worker
-		if (entity_id == 0)
+		// user_unique_id == 0：系统消息（etcd 等）→ 主线程 Worker
+		if (user_unique_id == 0)
 		{
 			auto main_worker = WorkerManager::Instance()->GetMainWorker();
 			if (main_worker)
@@ -78,7 +78,7 @@ namespace gb
 		if (policy_ == Policy::Stateful)
 		{
 			// 精确绑定查找，未命中 → 丢弃
-			uint32_t worker_index = entity_route_table_.Lookup(entity_id);
+			uint32_t worker_index = entity_route_table_.Lookup(user_unique_id);
 			if (worker_index != LockFreeRouteTable::kInvalidWorker)
 			{
 				auto worker = WorkerManager::Instance()->GetWorker(worker_index);
@@ -100,7 +100,7 @@ namespace gb
 		if (workers.empty())
 			return {};
 
-		auto target = PickWorker(workers, (MessageType)message_type, entity_id).lock();
+		auto target = PickWorker(workers, (MessageType)message_type, user_unique_id).lock();
 		if (!target)
 			return {};
 

@@ -208,31 +208,31 @@ TEST_CASE("route: Router::GetEntityExecutor 未绑定丢弃（Stateful）", "[ro
     router.SetPolicy(Router::Policy::Stateful);
 
     // Stateful + 未绑定 + 无 workers → hash 返回空 executor（丢弃）
-    auto exec = router.GetExecutor(/*type=*/0, /*entity_id=*/42);
+    auto exec = router.GetExecutor(/*type=*/0, /*user_unique_id=*/42);
     REQUIRE(exec.HasWorker() == false);
 
     // 绑定到不存在的 worker index（9999）→ worker 不存在，丢弃
     router.BindEntity(10, 20, 9999);
     router.FreezeEntityRoutes();
-    exec = router.GetExecutor(/*type=*/0, /*entity_id=*/15);
+    exec = router.GetExecutor(/*type=*/0, /*user_unique_id=*/15);
     REQUIRE(exec.HasWorker() == false);
     REQUIRE(router.GetEntityRouteTable().Lookup(15) == 9999);
 }
 
-TEST_CASE("route: Router::GetServiceExecutor entity_id==0 路由到 main_worker_", "[route][router]")
+TEST_CASE("route: Router::GetServiceExecutor user_unique_id==0 路由到 main_worker_", "[route][router]")
 {
     Router router;
-    // entity_id == 0：系统消息 → main_worker_（即使没有注册任何 Worker）
+    // user_unique_id == 0：系统消息 → main_worker_（即使没有注册任何 Worker）
     auto exec = router.GetServiceExecutor(MT_Login, 0);
     REQUIRE(exec.HasWorker() == true);
 }
 
-TEST_CASE("route: Router::GetExecutor(Stateful) entity_id==0 路由到 main_worker_", "[route][router]")
+TEST_CASE("route: Router::GetExecutor(Stateful) user_unique_id==0 路由到 main_worker_", "[route][router]")
 {
     Router router;
     router.SetPolicy(Router::Policy::Stateful);
-    // Stateful 下 entity_id == 0 也走 main_worker_
-    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/0).HasWorker() == true);
+    // Stateful 下 user_unique_id == 0 也走 main_worker_
+    REQUIRE(router.GetExecutor(/*type=*/0, /*user_unique_id=*/0).HasWorker() == true);
 }
 
 TEST_CASE("route: Router::Bind→Freeze→GetExecutor(Stateful) 验证路由表", "[route][router]")
@@ -245,12 +245,12 @@ TEST_CASE("route: Router::Bind→Freeze→GetExecutor(Stateful) 验证路由表"
     router.FreezeEntityRoutes();
 
     // 未绑定的 entity → 无 workers，丢弃
-    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/250).HasWorker() == false);
-    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/500).HasWorker() == false);
+    REQUIRE(router.GetExecutor(/*type=*/0, /*user_unique_id=*/250).HasWorker() == false);
+    REQUIRE(router.GetExecutor(/*type=*/0, /*user_unique_id=*/500).HasWorker() == false);
 
     // 已绑定但 worker index 99/88 不存在 → 丢弃
-    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/150).HasWorker() == false);
-    REQUIRE(router.GetExecutor(/*type=*/0, /*entity_id=*/350).HasWorker() == false);
+    REQUIRE(router.GetExecutor(/*type=*/0, /*user_unique_id=*/150).HasWorker() == false);
+    REQUIRE(router.GetExecutor(/*type=*/0, /*user_unique_id=*/350).HasWorker() == false);
 
     // 验证路由表内容正确（不经过 WorkerManager）
     const auto& tbl = router.GetEntityRouteTable();
@@ -329,7 +329,8 @@ TEST_CASE("route: Meta 默认构造各字段为零", "[route][meta]")
 {
     Meta meta;
     REQUIRE(meta.mode == Msg);
-    REQUIRE(meta.entity_id == 0);
+    REQUIRE(meta.user_unique_id == 0);
+    REQUIRE(meta.scene_id == 0);
     REQUIRE(meta.type == 0);
     REQUIRE(meta.compress_type == CompressTypeNone);
     REQUIRE(meta.method == 0);
@@ -347,14 +348,16 @@ TEST_CASE("route: Meta 手工构造完整验证", "[route][meta]")
 {
     Meta meta;
     meta.mode = Request;
-    meta.entity_id = 12345;
+    meta.user_unique_id = 12345;
+    meta.scene_id = 999;
     meta.type = 10001;
     meta.compress_type = CompressTypeNone;
     meta.method = 0xDEADBEEF;
     meta.sequence = 0xABCD000000000042ULL;
 
     REQUIRE(meta.mode == Request);
-    REQUIRE(meta.entity_id == 12345);
+    REQUIRE(meta.user_unique_id == 12345);
+    REQUIRE(meta.scene_id == 999);
     REQUIRE(meta.type == 10001);
     REQUIRE(meta.compress_type == CompressTypeNone);
     REQUIRE(meta.method == 0xDEADBEEF);

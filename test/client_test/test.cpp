@@ -20,7 +20,7 @@ void SendMsg1(std::shared_ptr<gb::Client> client)
     gb::Meta meta;
     meta.mode = gb::MsgMode::Msg;
     meta.type = 1;
-    meta.entity_id = 2;
+    meta.user_unique_id = 2;
     meta.compress_type = CompressTypeGzip;
 
     client->Send(gb::CONNECT_TYPE::CT_GATEWAY, &meta, &msg);

@@ -35,17 +35,19 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         sol::constructors<gb::Meta(), gb::Meta(const gb::Meta&)>(),
         
         // 成员变量可读写
-        "mode",          &gb::Meta::mode,
-        "entity_id",            &gb::Meta::entity_id,
-        "type",          &gb::Meta::type,
-        "method",        &gb::Meta::method,
-        "sequence",      &gb::Meta::sequence,
-        "compress_type", &gb::Meta::compress_type,
+        "mode",            &gb::Meta::mode,
+        "user_unique_id",  &gb::Meta::user_unique_id,
+        "type",            &gb::Meta::type,
+        "scene_id",        &gb::Meta::scene_id,
+        "method",          &gb::Meta::method,
+        "sequence",        &gb::Meta::sequence,
+        "compress_type",   &gb::Meta::compress_type,
         
         // 成员函数（通过自定义函数实现）
         sol::meta_function::to_string, [](const gb::Meta& self) {
             return "Meta{mode=" + std::to_string(static_cast<int>(self.mode)) 
-                 + ", entity_id=" + std::to_string(self.entity_id)
+                 + ", user_unique_id=" + std::to_string(self.user_unique_id)
+                 + ", scene_id=" + std::to_string(self.scene_id)
                  + ", type=" + std::to_string(self.type)
                  + ", method=" + std::to_string(self.method)
                  + ", sequence=" + std::to_string(self.sequence)
@@ -56,7 +58,8 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         // 比较操作符（可选）
         sol::meta_function::equal_to, [](const gb::Meta& lhs, const gb::Meta& rhs) {
             return lhs.mode == rhs.mode 
-                && lhs.entity_id == rhs.entity_id
+                && lhs.user_unique_id == rhs.user_unique_id
+                && lhs.scene_id == rhs.scene_id
                 && lhs.type == rhs.type
                 && lhs.method == rhs.method
                 && lhs.sequence == rhs.sequence
@@ -67,27 +70,35 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
 
 	network["Listen"]	= [](uint32_t type, sol::function  f,std::string protoName = "") {  gb::NetworkManager::Instance()->Listen(type, f, protoName); };
 	network["UnListen"] = [](uint32_t type,  std::string signal, int level = 0) { gb::NetworkManager::Instance()->UnListen(type, signal, level); };
-    network["Send"]     = sol::overload([](Session* session, uint32_t type, uint64_t id, sol::object lua_msg) {
-                                            google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
-                                            if (messgae)
-                                            {
-                                                gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
-                                            }
-                                        },
+    network["Send"]     = sol::overload(
+                                    [](Session* session, uint32_t type, uint64_t id, sol::object lua_msg) {
+                                        google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
+                                        if (messgae)
+                                            gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
+                                    },
                                     [](std::shared_ptr<Session> session, uint32_t type, uint64_t id, sol::object lua_msg) {
                                         google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
-                                            if (messgae)
-                                            {
-                                                gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
-                                            }
-                                        });
+                                        if (messgae)
+                                            gb::NetworkManager::Instance()->Send(session, type, id, *messgae);
+                                    },
+                                    [](Session* session, Meta meta, sol::object lua_msg) {
+                                        google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
+                                        if (messgae)
+                                            gb::NetworkManager::Instance()->Send(session, meta, *messgae);
+                                    },
+                                    [](std::shared_ptr<Session> session, Meta meta, sol::object lua_msg) {
+                                        google::protobuf::Message* messgae = lua_msg.as<google::protobuf::Message*>();
+                                        if (messgae)
+                                            gb::NetworkManager::Instance()->Send(session, meta, *messgae);
+                                    });
     // ── BuildMeta ─────────────────────────────────
     // Lua: meta_table -> binary bytes
     network["BuildMeta"] = [](sol::table meta_tbl) -> std::vector<uint8_t> {
         Meta meta;
         meta.mode           = static_cast<MsgMode>(meta_tbl.get_or("mode", 0));
-        meta.entity_id      = meta_tbl.get_or<uint64_t>("entity_id", 0);
+        meta.user_unique_id = meta_tbl.get_or<uint64_t>("user_unique_id", 0);
         meta.type           = meta_tbl.get_or<uint32_t>("type", 0);
+        meta.scene_id       = meta_tbl.get_or<uint32_t>("scene_id", 0);
         meta.method         = meta_tbl.get_or<uint64_t>("method", 0);
         meta.sequence       = meta_tbl.get_or<uint64_t>("sequence", 0);
         meta.compress_type  = static_cast<CompressType>(meta_tbl.get_or("compress_type", 0));
@@ -104,12 +115,13 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
             std::memcpy(&meta, data.data(), sizeof(meta));
         sol::state_view lua(scriptPtr->lua_state());
         sol::table tbl = lua.create_table();
-        tbl["mode"]          = static_cast<int>(meta.mode);
-        tbl["entity_id"]     = meta.entity_id;
-        tbl["type"]          = meta.type;
-        tbl["method"]        = meta.method;
-        tbl["sequence"]      = meta.sequence;
-        tbl["compress_type"] = static_cast<int>(meta.compress_type);
+        tbl["mode"]            = static_cast<int>(meta.mode);
+        tbl["user_unique_id"]  = meta.user_unique_id;
+        tbl["type"]            = meta.type;
+        tbl["scene_id"]        = meta.scene_id;
+        tbl["method"]          = meta.method;
+        tbl["sequence"]        = meta.sequence;
+        tbl["compress_type"]   = static_cast<int>(meta.compress_type);
         return tbl;
     };
 
