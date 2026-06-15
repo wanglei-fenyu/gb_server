@@ -14,7 +14,7 @@ namespace gb
 	{
 	public:
 		enum class Policy : uint8_t {
-			Stateful,   // 实体路由（scene_id / user_unique_id 精确绑定）：Scene Server 等有状态服务器
+			Stateful,   // 实体路由（user_unique_id 精确绑定）：Scene Server 等有状态服务器
 			Stateless,  // hash 路由：Gateway Server 等无状态服务器
 		};
 
@@ -30,7 +30,7 @@ namespace gb
 		/// 统一路由入口：
 		///   user_unique_id == 0：系统消息（etcd 等）→ main_worker_（主线程）
 		///   user_unique_id != 0：
-		///     - Policy::Stateful：查 entity_route_table_（优先用 scene_id），未命中 → 丢弃
+		///     - Policy::Stateful：查 entity_route_table_（user_unique_id 精确路由），未命中 → 丢弃
 		///     - Policy::Stateless：纯 hash 路由
 		///   路由失败 → 返回空 executor，消息丢弃
 		WorkerExecutor GetExecutor(uint32_t message_type, uint64_t user_unique_id) const;

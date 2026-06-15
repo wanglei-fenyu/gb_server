@@ -330,7 +330,6 @@ TEST_CASE("route: Meta 默认构造各字段为零", "[route][meta]")
     Meta meta;
     REQUIRE(meta.mode == Msg);
     REQUIRE(meta.user_unique_id == 0);
-    REQUIRE(meta.scene_id == 0);
     REQUIRE(meta.type == 0);
     REQUIRE(meta.compress_type == CompressTypeNone);
     REQUIRE(meta.method == 0);
@@ -349,7 +348,6 @@ TEST_CASE("route: Meta 手工构造完整验证", "[route][meta]")
     Meta meta;
     meta.mode = Request;
     meta.user_unique_id = 12345;
-    meta.scene_id = 999;
     meta.type = 10001;
     meta.compress_type = CompressTypeNone;
     meta.method = 0xDEADBEEF;
@@ -357,7 +355,6 @@ TEST_CASE("route: Meta 手工构造完整验证", "[route][meta]")
 
     REQUIRE(meta.mode == Request);
     REQUIRE(meta.user_unique_id == 12345);
-    REQUIRE(meta.scene_id == 999);
     REQUIRE(meta.type == 10001);
     REQUIRE(meta.compress_type == CompressTypeNone);
     REQUIRE(meta.method == 0xDEADBEEF);

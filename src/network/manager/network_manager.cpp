@@ -193,7 +193,7 @@ void NetworkManager::Dispatch(const SessionPtr& session, const ReadBufferPtr& bu
         case MsgMode::Msg:
         {
             // 统一路由入口：根据 ServerApp::SetRouterPolicy 设定的策略自动走对应路径
-            //   Stateful：按 scene_id（优先）或 user_unique_id 精确绑定
+            //   Stateful：按 user_unique_id 精确绑定
             //   Stateless：纯 hash 路由
             auto           executor    = router_.GetExecutor(meta.type, meta.user_unique_id);
             net_listen_fun listen_func = FindListenFunction(meta.type);

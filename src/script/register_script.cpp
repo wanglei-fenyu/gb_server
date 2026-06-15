@@ -38,7 +38,6 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         "mode",            &gb::Meta::mode,
         "user_unique_id",  &gb::Meta::user_unique_id,
         "type",            &gb::Meta::type,
-        "scene_id",        &gb::Meta::scene_id,
         "method",          &gb::Meta::method,
         "sequence",        &gb::Meta::sequence,
         "compress_type",   &gb::Meta::compress_type,
@@ -47,7 +46,6 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         sol::meta_function::to_string, [](const gb::Meta& self) {
             return "Meta{mode=" + std::to_string(static_cast<int>(self.mode)) 
                  + ", user_unique_id=" + std::to_string(self.user_unique_id)
-                 + ", scene_id=" + std::to_string(self.scene_id)
                  + ", type=" + std::to_string(self.type)
                  + ", method=" + std::to_string(self.method)
                  + ", sequence=" + std::to_string(self.sequence)
@@ -59,7 +57,6 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         sol::meta_function::equal_to, [](const gb::Meta& lhs, const gb::Meta& rhs) {
             return lhs.mode == rhs.mode 
                 && lhs.user_unique_id == rhs.user_unique_id
-                && lhs.scene_id == rhs.scene_id
                 && lhs.type == rhs.type
                 && lhs.method == rhs.method
                 && lhs.sequence == rhs.sequence
@@ -98,7 +95,6 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         meta.mode           = static_cast<MsgMode>(meta_tbl.get_or("mode", 0));
         meta.user_unique_id = meta_tbl.get_or<uint64_t>("user_unique_id", 0);
         meta.type           = meta_tbl.get_or<uint32_t>("type", 0);
-        meta.scene_id       = meta_tbl.get_or<uint32_t>("scene_id", 0);
         meta.method         = meta_tbl.get_or<uint64_t>("method", 0);
         meta.sequence       = meta_tbl.get_or<uint64_t>("sequence", 0);
         meta.compress_type  = static_cast<CompressType>(meta_tbl.get_or("compress_type", 0));
@@ -118,7 +114,6 @@ static void register_net(std::shared_ptr<Script>& scriptPtr)
         tbl["mode"]            = static_cast<int>(meta.mode);
         tbl["user_unique_id"]  = meta.user_unique_id;
         tbl["type"]            = meta.type;
-        tbl["scene_id"]        = meta.scene_id;
         tbl["method"]          = meta.method;
         tbl["sequence"]        = meta.sequence;
         tbl["compress_type"]   = static_cast<int>(meta.compress_type);
