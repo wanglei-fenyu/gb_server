@@ -378,8 +378,9 @@ class Worker {
 ```cpp
 struct Meta {
     MsgMode      mode{Msg};         // Msg / Request / Response
-    uint64_t     entity_id{0};      // 路由主键（玩家 ID / 场景 ID / NPC ID），完整 64 位
+    uint64_t     user_unique_id{0}; // 用户/玩家唯一标识（上下文）
     uint32_t     type{0};           // 消息类型（Listen 分发用）
+    uint32_t     scene_id{0};       // 场景 ID（路由主键，0=不使用场景路由）
     CompressType compress_type{CompressTypeNone};
     uint64_t     method{0};         // RPC 方法名 MD5 哈希
     uint64_t     sequence{0};       // RPC 序列号（编码 worker_index+local_seq）
