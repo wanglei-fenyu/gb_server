@@ -42,6 +42,7 @@ void HttpsSession::DoRead()
     parser_.emplace();
     parser_->body_limit(owner_.max_body_size_);
 
+    stream_.next_layer().expires_after(std::chrono::seconds(owner_.request_timeout_seconds_));
     beast_http::async_read(stream_, buffer_, *parser_,
         beast::bind_front_handler(&HttpsSession::OnRead, shared_from_this()));
 }
@@ -69,6 +70,7 @@ void HttpsSession::OnRead(beast::error_code ec, size_t /*bytes*/)
 
     bool keep_alive = response->keep_alive();
     auto self       = shared_from_this();
+    stream_.next_layer().expires_after(std::chrono::seconds(owner_.request_timeout_seconds_));
     beast_http::async_write(stream_, *response,
         [self, this, response, keep_alive](beast::error_code ec2, size_t) {
             if (ec2)

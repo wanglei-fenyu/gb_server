@@ -16,13 +16,13 @@ namespace gb
 
     void Router::SetRouteKeySelector(std::function<uint64_t(MessageType, uint64_t)> selector)
     {
-        std::lock_guard<std::mutex> lock(strategy_mutex_);
+        std::lock_guard<std::shared_mutex> lock(strategy_mutex_);
         route_key_selector_ = std::move(selector);
     }
 
     void Router::SetWorkerIndexSelector(std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> selector)
     {
-        std::lock_guard<std::mutex> lock(strategy_mutex_);
+        std::lock_guard<std::shared_mutex> lock(strategy_mutex_);
         worker_index_selector_ = std::move(selector);
     }
 
@@ -34,7 +34,7 @@ namespace gb
         std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> worker_index_selector;
         std::function<uint64_t(MessageType, uint64_t)> route_key_selector;
         {
-            std::lock_guard<std::mutex> lock(strategy_mutex_);
+            std::shared_lock<std::shared_mutex> lock(strategy_mutex_);
             worker_index_selector = worker_index_selector_;
             route_key_selector    = route_key_selector_;
         }

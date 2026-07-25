@@ -62,8 +62,11 @@ HttpClient::ParsedUrl HttpClient::ParseUrl(const std::string& url)
 // HttpClient 实现
 // ---------------------------------------------------------------------------
 HttpClient::HttpClient(asio::io_context& ioc) :
-    ioc_(ioc)
+    ioc_(ioc),
+    ssl_ctx_(asio::ssl::context::tlsv12_client)
 {
+    ssl_ctx_.set_default_verify_paths();
+    ssl_ctx_.set_verify_mode(asio::ssl::verify_peer | asio::ssl::verify_fail_if_no_peer_cert);
 }
 
 HttpClient::~HttpClient() = default;
@@ -169,11 +172,7 @@ asio::awaitable<HttpResponse> HttpClient::DoRequest(
         if (parsed.is_ssl)
         {
             // ---- HTTPS 请求 ----
-            asio::ssl::context ssl_ctx(asio::ssl::context::tlsv12_client);
-            ssl_ctx.set_default_verify_paths();
-            ssl_ctx.set_verify_mode(asio::ssl::verify_peer | asio::ssl::verify_fail_if_no_peer_cert);
-
-            beast::ssl_stream<beast::tcp_stream> stream(ioc_, ssl_ctx);
+            beast::ssl_stream<beast::tcp_stream> stream(ioc_, ssl_ctx_);
 
             // 设置超时
             stream.next_layer().expires_after(

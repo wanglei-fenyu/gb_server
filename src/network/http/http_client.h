@@ -3,6 +3,7 @@
 #include <memory>
 #include <string>
 #include <boost/asio/io_context.hpp>
+#include <boost/asio/ssl.hpp>
 #include <boost/asio/awaitable.hpp>
 
 namespace gb
@@ -87,6 +88,7 @@ private:
         const std::string&       content_type);
 
     boost::asio::io_context& ioc_;
+    asio::ssl::context       ssl_ctx_;
     Timeouts                 timeouts_;
 };
 

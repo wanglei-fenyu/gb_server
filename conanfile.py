@@ -16,7 +16,7 @@ class GBServer(ConanFile):
         self.requires("gbnet/0.1.0")
         self.requires("spdlog/1.15.0")
         self.requires("boost/1.90.0")         
-        self.requires("protobuf/3.21.12")     
+        self.requires("protobuf/5.27.0",override=True)     
         self.requires("openssl/3.0.13")        
         self.requires("zlib/1.3.1")           
         self.requires("async_simple/1.4")

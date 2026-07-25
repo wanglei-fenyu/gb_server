@@ -3,7 +3,9 @@
 #include <vector>
 #include <atomic>
 #include <algorithm>
+#include <cassert>
 #include <memory>
+#include <thread>
 #include "log/log.h"
 
 namespace gb {
@@ -38,6 +40,7 @@ public:
     LockFreeRouteTable()
         : pending_(new Table())
         , retired_(nullptr)
+        , main_thread_id_(std::this_thread::get_id())
     {
         current_.store(nullptr, std::memory_order_release);
     }
@@ -61,50 +64,56 @@ public:
     /// 与已有区间重叠的部分将被覆盖。
     void Bind(uint64_t entity_begin, uint64_t entity_end, uint32_t worker_index)
     {
+        assert(std::this_thread::get_id() == main_thread_id_);
         if (entity_begin >= entity_end)
             return;
 
-        // 移除被本区间覆盖的已有条目
         auto& vec = *pending_;
-        for (auto it = vec.begin(); it != vec.end(); )
+
+        // insert / erase 会使迭代器失效，完全包围拆分后必须重新扫描
+        bool restart = true;
+        while (restart)
         {
-            if (it->end <= entity_begin || it->begin >= entity_end)
+            restart = false;
+            for (auto it = vec.begin(); it != vec.end(); )
             {
-                // 不重叠
-                ++it;
-                continue;
-            }
+                if (it->end <= entity_begin || it->begin >= entity_end)
+                {
+                    // 不重叠
+                    ++it;
+                    continue;
+                }
 
-            if (it->begin < entity_begin && it->end > entity_end)
-            {
-                // 完全包围：拆分为左右两段
-                // 必须先保存右段结束位置，it->end 随后会被修改
-                uint64_t right_end  = it->end;
-                uint64_t left_end   = entity_begin;
-                uint64_t right_begin = entity_end;
-                it->end = left_end;
-                vec.insert(it + 1, Entry{right_begin, right_end, it->worker_index});
-                // 重新调整 iter（插入后 it 可能失效）
-                // 简化：直接跳出，外部 for 下次从头再扫
-                break;
-            }
+                if (it->begin < entity_begin && it->end > entity_end)
+                {
+                    // 完全包围：拆分为左右两段
+                    // 必须先保存右段结束位置，it->end 随后会被修改
+                    uint64_t right_end  = it->end;
+                    uint64_t right_begin = entity_end;
+                    it->end = entity_begin;
+                    vec.insert(it + 1, Entry{right_begin, right_end, it->worker_index});
+                    // insert 后所有迭代器失效，重新扫描以处理剩余重叠
+                    restart = true;
+                    break;
+                }
 
-            if (it->begin < entity_begin)
-            {
-                // 左截断
-                it->end = entity_begin;
-                ++it;
-            }
-            else if (it->end > entity_end)
-            {
-                // 右截断
-                it->begin = entity_end;
-                ++it;
-            }
-            else
-            {
-                // 完全包含在新区间内 → 删除
-                it = vec.erase(it);
+                if (it->begin < entity_begin)
+                {
+                    // 左截断
+                    it->end = entity_begin;
+                    ++it;
+                }
+                else if (it->end > entity_end)
+                {
+                    // 右截断
+                    it->begin = entity_end;
+                    ++it;
+                }
+                else
+                {
+                    // 完全包含在新区间内 → 删除
+                    it = vec.erase(it);
+                }
             }
         }
 
@@ -114,6 +123,7 @@ public:
     /// 解除单例 entity_id 的绑定（移除包含此 ID 的区间）
     void Unbind(uint64_t entity_id)
     {
+        assert(std::this_thread::get_id() == main_thread_id_);
         auto& vec = *pending_;
         for (auto it = vec.begin(); it != vec.end(); ++it)
         {
@@ -147,7 +157,9 @@ public:
     /// 冻结：排序 pending_ → 创建只读快照 → 原子 swap → 回收旧快照
     void Freeze()
     {
-        // 排序 & 合并重叠
+        assert(std::this_thread::get_id() == main_thread_id_);
+
+        // 排序 & 合并重叠（防御性：正常 Bind 不应产生重叠）
         std::sort(pending_->begin(), pending_->end(),
             [](const Entry& a, const Entry& b) { return a.begin < b.begin; });
 
@@ -156,7 +168,8 @@ public:
         {
             if (!snapshot->empty() && snapshot->back().end > e.begin)
             {
-                // 合并重叠（取最新的 worker_index）
+                // 合并重叠：后插入的条目覆盖先前的 worker_index
+                snapshot->back().worker_index = e.worker_index;
                 if (snapshot->back().end < e.end)
                     snapshot->back().end = e.end;
             }
@@ -209,6 +222,7 @@ private:
     Table*                    pending_;              // 写缓冲区（主线程独占）
     std::atomic<Table*>       current_;              // 只读快照（任意线程读）
     Table*                    retired_;              // 待回收的快照
+    std::thread::id           main_thread_id_;       // 主线程 ID（断言用）
 };
 
 }

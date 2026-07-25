@@ -6,7 +6,7 @@
 #include "lock_free_route_table.h"
 #include "network/rpc/executor.h"
 #include <functional>
-#include <mutex>
+#include <shared_mutex>
 namespace gb
 {
 
@@ -62,7 +62,7 @@ namespace gb
 		Policy policy_ = Policy::Stateless;
 
 		RouteTable route_table_;
-		mutable std::mutex                               strategy_mutex_;
+		mutable std::shared_mutex                       strategy_mutex_;
 		std::function<uint64_t(MessageType, uint64_t)>  route_key_selector_;
 		std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> worker_index_selector_;
 

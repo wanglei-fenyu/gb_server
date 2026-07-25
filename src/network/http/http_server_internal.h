@@ -14,6 +14,7 @@
 #include <mutex>
 #include <map>
 #include <sstream>
+#include <chrono>
 
 namespace asio     = boost::asio;
 namespace beast    = boost::beast;
@@ -26,6 +27,41 @@ namespace gb
 // ---------------------------------------------------------------------------
 // 辅助函数（内联，可在头文件中使用）
 // ---------------------------------------------------------------------------
+
+inline int HexCharToDigit(char c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+inline std::string UrlDecode(const std::string& str)
+{
+    std::string result;
+    result.reserve(str.size());
+    for (size_t i = 0; i < str.size(); ++i)
+    {
+        if (str[i] == '%' && i + 2 < str.size())
+        {
+            int hi = HexCharToDigit(str[i + 1]);
+            int lo = HexCharToDigit(str[i + 2]);
+            if (hi >= 0 && lo >= 0)
+            {
+                result += static_cast<char>(hi * 16 + lo);
+                i += 2;
+                continue;
+            }
+        }
+        else if (str[i] == '+')
+        {
+            result += ' ';
+            continue;
+        }
+        result += str[i];
+    }
+    return result;
+}
 
 inline std::map<std::string, std::string> ParseQueryString(const std::string& target)
 {
@@ -41,9 +77,9 @@ inline std::map<std::string, std::string> ParseQueryString(const std::string& ta
     {
         auto eq = pair.find('=');
         if (eq != std::string::npos)
-            params[pair.substr(0, eq)] = pair.substr(eq + 1);
+            params[UrlDecode(pair.substr(0, eq))] = UrlDecode(pair.substr(eq + 1));
         else
-            params[pair] = "";
+            params[UrlDecode(pair)] = "";
     }
     return params;
 }
@@ -130,6 +166,7 @@ struct HttpServer::Impl
     std::vector<RouteEntry> routes_;
     std::mutex              routes_mutex_;
     size_t                  max_body_size_ = 1024 * 1024;
+    int                     request_timeout_seconds_ = 30;
     std::atomic<bool>       running_{false};
 
     // -- Impl 方法 ----------------------------------------------------------
