@@ -1,6 +1,6 @@
 ﻿#pragma once 
 #include "listener.h"
-#include "gbnet/common/define.h"
+#include "define/define.h"
 #include "network/io/timer_worker.h"
 #include "handle_interface.h"
 namespace gb

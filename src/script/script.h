@@ -1,7 +1,7 @@
 #pragma once
 #include <sol/sol.hpp>
 #include <google/protobuf/message.h>
-#include <gbnet/buffer/buffer.h>
+#include "buffer/buffer.h"
 
 void OnScriptError(sol::error&& err);
 class Script : public sol::state

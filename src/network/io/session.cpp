@@ -2,7 +2,7 @@
 #include "session.h"
 #include "network/io/buffer_pack.hpp"
 #include "base/timer_help.h"
-#include "gbnet/buffer/compressed_stream.h"
+#include "buffer/compressed_stream.h"
 namespace gb
 {
 

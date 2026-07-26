@@ -14,8 +14,8 @@
 #include <cstring>   // for memcpy
 
 #include <sol/sol.hpp>
-#include "gbnet/common/def.h"
-#include "gbnet/common/define.h"
+#include "../define/def.h"
+#include "../define/define.h"
 
 #ifdef WIN32
 #ifdef max

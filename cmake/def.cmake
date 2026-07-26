@@ -25,7 +25,6 @@ macro(conan_link_libraries target_name)
     
     # 直接使用 target 链接（头文件和库会自动传递）
     target_link_libraries(${target_name} ${_link_type}
-        gbnet::gbnet
         Boost::boost
         spdlog::spdlog
         protobuf::libprotobuf

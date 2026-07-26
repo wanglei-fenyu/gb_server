@@ -18,7 +18,6 @@ endif()
 
 
 # 查找所有 Conan 依赖包（全局，子目录共享）
-find_package(gbnet REQUIRED)
 find_package(Boost REQUIRED COMPONENTS charconv)
 find_package(spdlog REQUIRED)
 find_package(protobuf REQUIRED)

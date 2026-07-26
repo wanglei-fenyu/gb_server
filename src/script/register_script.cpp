@@ -6,7 +6,7 @@
 #include "log/log.h"
 #include "network/io/message_meta.h"
 #include <filesystem>
-#include "gbnet/buffer/compressed_def.h"
+#include "buffer/compressed_def.h"
 #include "network/rpc/register_rpc.h"
 using namespace gb;
 

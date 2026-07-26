@@ -9,7 +9,7 @@
 #    include <unistd.h>
 #    include <limits.h>
 #endif
-#include <gbnet/common/def.h>
+#include "../define/def.h"
 
 ResPath::ResPath()
 {

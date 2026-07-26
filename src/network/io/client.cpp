@@ -1,5 +1,5 @@
 #include "client.h"
-#include "gbnet/common/endpoint_help.h"
+#include "../base/endpoint_help.h"
 namespace gb
 {
 

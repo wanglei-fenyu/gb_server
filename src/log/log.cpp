@@ -10,7 +10,7 @@
 #include "spdlog/sinks/rotating_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 
-#include "gbnet/log/net_log_help.h"
+#include "log/net_log_help.h"
 using namespace std;
 
 

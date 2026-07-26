@@ -6,7 +6,7 @@
 #include <lua.hpp>
 #include "script/script.h"
 #include "network/io/message_meta.h"
-#include "gbnet/buffer/compressed_stream.h"
+#include "buffer/compressed_stream.h"
 #include "network/rpc/rpc_function_help.h"
 #include "network/rpc/register_rpc.h"
 

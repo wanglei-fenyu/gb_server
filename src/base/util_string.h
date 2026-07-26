@@ -4,7 +4,7 @@
 #include <vector>
 #include <cstdarg>
 
-#include "gbnet/common/common.h"
+#include "define/def.h"
 
 namespace strutil {
 

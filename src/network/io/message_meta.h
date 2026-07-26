@@ -1,5 +1,5 @@
 #pragma once
-#include "gbnet/buffer/compressed_def.h"
+#include "buffer/compressed_def.h"
 #include <cstdint>
 #include <google/protobuf/io/zero_copy_stream_impl.h>
 #include "log/log.h"

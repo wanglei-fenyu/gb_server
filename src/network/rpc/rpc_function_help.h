@@ -1,5 +1,5 @@
 ﻿#pragma once 
-#include <gbnet/buffer/buffer.h>
+#include "buffer/buffer.h"
 #include "network/io/message_meta.h"
 #include <tuple>
 #include <type_traits>

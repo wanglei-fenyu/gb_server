@@ -1,5 +1,5 @@
 #pragma once 
-#include <gbnet/common/define.h>
+#include "define/define.h"
 #include <chrono>
 
 #if USE_STANDALONE_ASIO

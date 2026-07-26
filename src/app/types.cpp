@@ -2,7 +2,7 @@
 #include "base/res_path.h"
 #include "rapidxml/rapidxml.hpp"
 #include "rapidxml/rapidxml_utils.hpp"
-#include <gbnet/common/def.h>
+#include "../define/def.h"
 AppTypeMgr::AppTypeMgr()
 {
 	_names.insert(std::make_pair(APP_TYPE::APP_Global, "global"));

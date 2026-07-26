@@ -1,6 +1,6 @@
 #pragma once 
-#include "gbnet/common/def.h"
-#include "gbnet/common/define.h"
+#include "../define/def.h"
+#include "../define/define.h"
 #include <functional>
 #include "script/script.h"
 #include <concurrentqueue.h>

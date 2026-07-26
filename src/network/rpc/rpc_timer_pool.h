@@ -3,8 +3,8 @@
 #include <vector>
 #include <functional>
 #include <atomic>
-#include "gbnet/common/def.h"
-#include "gbnet/common/define.h"
+#include "define/def.h"
+#include "define/define.h"
 
 namespace gb
 {

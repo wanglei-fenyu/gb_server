@@ -6,7 +6,7 @@ REM Default is tuned for Windows/Linux compatibility with explicit host/build pr
 
 set "PROFILE_HOST=profiles/msvc_debug_pr"
 set "PROFILE_BUILD=profiles/msvc_debug_pr"
-set "CPPSTD=gnu23"
+set "CPPSTD=23"
 set "BUILD_MISSING=1"
 set "DO_CLEAN=0"
 set "EXTRA_ARGS="

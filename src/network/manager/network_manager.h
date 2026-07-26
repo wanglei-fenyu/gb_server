@@ -1,6 +1,6 @@
 ﻿#pragma once 
-#include "gbnet/common/def.h"
-#include "gbnet/common/define.h"
+#include "define/def.h"
+#include "define/define.h"
 #include "network/io/session.h"
 #include "network/rpc/function.hpp"
 #include "log/log.h"
@@ -10,7 +10,7 @@
 #include "network/io/message_meta.h"
 #include "network/io/io_service_pool.h"
 #include "network/io/server.h"
-#include "gbnet/buffer/buffer.h"
+#include "buffer/buffer.h"
 #include "base/md5.hpp"
 #include "network/rpc/executor.h"
 #include "base/singleton.h"

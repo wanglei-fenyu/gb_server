@@ -1,6 +1,6 @@
 ﻿#pragma once
-#include <gbnet/message_stream/message_stream.h>
-#include <gbnet/common/define.h>
+#include "message_stream/message_stream.h"
+#include "define/define.h"
 #include "network/io/message_meta.h"
 #include "network/io/io_service_pool.h"
 namespace gb

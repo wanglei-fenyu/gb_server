@@ -1,5 +1,5 @@
 #pragma once 
-#include <gbnet/common/define.h>
+#include <define/define.h>
 
 namespace gb
 {

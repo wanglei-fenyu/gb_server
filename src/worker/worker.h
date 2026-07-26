@@ -1,10 +1,9 @@
 #pragma once
-#include "gbnet/common/def.h"
-#include "gbnet/common/define.h"
+#include "define/def.h"
+#include "define/define.h"
 #include <functional>
 #include "script/script.h"
 #include "base/singleton.h"
-#include <gbnet/common/define.h>
 #include "concurrentqueue.h"
 #include "timer/timer_manager.h"
 #include <atomic>

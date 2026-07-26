@@ -1,6 +1,6 @@
 ﻿#include "rpc_function_help.h"
 #include "network/io/message_meta.h"
-#include <gbnet/buffer/compressed_stream.h>
+#include "buffer/compressed_stream.h"
 #include "google/protobuf/io/zero_copy_stream_impl_lite.h"
 #include "google/protobuf/message.h"
 namespace gb
