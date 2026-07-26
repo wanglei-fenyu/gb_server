@@ -1,5 +1,5 @@
 #include "block_wrappers.h"
-#include "../common/define.h"
+#include "define/define.h"
 #include "lz4.h"
 namespace gb
 {

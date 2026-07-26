@@ -27,7 +27,7 @@ macro(conan_link_libraries target_name)
     target_link_libraries(${target_name} ${_link_type}
         Boost::boost
         spdlog::spdlog
-        protobuf::libprotobuf
+        protobuf::protobuf
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
@@ -43,7 +43,6 @@ macro(conan_link_libraries target_name)
         cnats::nats_static
         etcd-cpp-apiv3::etcd-cpp-apiv3
     )
-
 
 endmacro()
 

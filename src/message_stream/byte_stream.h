@@ -3,7 +3,7 @@
 #include <deque>
 #include <memory>
 #include <string>
-#include "../common/define.h"
+#include "define/define.h"
 
 
 namespace gb

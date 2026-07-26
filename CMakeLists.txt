@@ -1,11 +1,11 @@
 cmake_minimum_required(VERSION 3.15)
 add_definitions(-D_CRT_SECURE_NO_WARNINGS)
 # 项目定义（必须在 def.cmake 之前，使 MSVC/WIN32/LINUX 变量生效）
+include(cmake/def.cmake)
+include(cmake/base.cmake)
 project(GBServer)
 list(APPEND CMAKE_PREFIX_PATH "${CMAKE_BINARY_DIR}/generators")
 # 包含自定义函数和配置
-include(cmake/base.cmake)
-include(cmake/def.cmake)
 
 # 引入 Conan toolchain
 if(EXISTS ${CMAKE_BINARY_DIR}/generators/conan_toolchain.cmake)
@@ -35,6 +35,32 @@ find_package(PostgreSQL REQUIRED)
 find_package(Catch2 REQUIRED)
 find_package(cnats REQUIRED)
 find_package(etcd-cpp-apiv3 REQUIRED)
+
+
+if(MSVC)
+    execute_process(
+        COMMAND conan cache path protobuf/6.33.5
+        OUTPUT_VARIABLE PROTOBUF_CACHE_PATH
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+    )
+    
+    if(PROTOBUF_CACHE_PATH AND EXISTS ${PROTOBUF_CACHE_PATH})
+        # 尝试在缓存路径下找头文件
+        set(PROTOBUF_CANDIDATE_DIRS
+            ${PROTOBUF_CACHE_PATH}
+            ${PROTOBUF_CACHE_PATH}/include
+            ${PROTOBUF_CACHE_PATH}/p/include
+            ${PROTOBUF_CACHE_PATH}/p
+        )
+        foreach(DIR ${PROTOBUF_CANDIDATE_DIRS})
+            if(EXISTS ${DIR}/google/protobuf)
+                include_directories(${DIR})
+                message(STATUS "✅ Protobuf include from conan cache: ${DIR}")
+                break()
+            endif()
+        endforeach()
+    endif()
+endif()
 
 if(MSVC)
     # MSVC 不接受 -fPIC（Conan 工具链可能开启）

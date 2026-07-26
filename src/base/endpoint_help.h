@@ -1,6 +1,6 @@
 #pragma once
 #include <string.h>
-#include "define.h"
+#include "define/define.h"
 namespace gb
 {
 
