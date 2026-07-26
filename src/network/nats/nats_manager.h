@@ -169,6 +169,14 @@ public:
 
     // ── Request (coroutine only) ────────────────────────────────────
 
+    using RequestCallback = std::function<void(int, std::vector<uint8_t>)>;
+
+    void AsyncRequest(const std::string&          subject,
+                      const Meta&                 meta,
+                      const std::vector<uint8_t>& data,
+                      RequestCallback             callback,
+                      std::chrono::milliseconds   timeout = std::chrono::seconds(5));
+
     async_simple::coro::Lazy<NatsResult<std::vector<uint8_t>>> RequestRaw(
         const std::string&          subject,
         const Meta&                 meta,

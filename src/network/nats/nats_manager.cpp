@@ -88,6 +88,7 @@ struct TLS_Nats
     {
         std::shared_ptr<async_simple::Promise<
             NatsResult<std::vector<uint8_t>>>> promise;
+        std::shared_ptr<NatsManager::RequestCallback> callback;
         natsSubscription* nats_sub{nullptr};
         int64_t           timer_id{-1};
     };
@@ -141,6 +142,103 @@ NatsManager::NatsManager() = default;
 NatsManager::~NatsManager()
 {
     Disconnect();
+}
+
+void NatsManager::AsyncRequest(const std::string&          subject,
+                               const Meta&                 meta,
+                               const std::vector<uint8_t>& data,
+                               RequestCallback             callback,
+                               std::chrono::milliseconds   timeout)
+{
+    if (!connected_.load(std::memory_order_acquire))
+    {
+        if (callback)
+            callback(NatsError::Disconnected, {});
+        return;
+    }
+
+    // ── 1. Unique inbox with embedded worker_index ────────────────
+    std::string inbox = GenInbox();
+
+    // ── 2. Subscribe to inbox ─────────────────────────────────────
+    natsSubscription* nats_sub = nullptr;
+    natsStatus sub_status = natsConnection_Subscribe(
+        &nats_sub, conn_, inbox.c_str(),
+        &NatsManager::OnNatsInboxMsg, nullptr);
+    if (sub_status != NATS_OK)
+    {
+        if (callback)
+            callback(NatsError::SubscribeFailed, {});
+        return;
+    }
+    natsSubscription_AutoUnsubscribe(nats_sub, 1);
+
+    // ── 3. Save callback in thread_local pending map ──────────────
+    {
+        auto& tls = tlsNats();
+        TLS_Nats::PendingRequest pr;
+        pr.callback = std::make_shared<RequestCallback>(std::move(callback));
+        pr.nats_sub = nats_sub;
+        tls.pending[inbox] = std::move(pr);
+    }
+
+    // ── 4. PublishRequest ─────────────────────────────────────────
+    auto payload = detail::BuildPayload(meta, data);
+    natsStatus pub_status = natsConnection_PublishRequest(
+        conn_, subject.c_str(), inbox.c_str(),
+        payload.data(), static_cast<int>(payload.size()));
+    if (pub_status != NATS_OK)
+    {
+        auto& tls = tlsNats();
+        auto it = tls.pending.find(inbox);
+        if (it != tls.pending.end())
+        {
+            if (it->second.nats_sub)
+            {
+                natsSubscription_Destroy(it->second.nats_sub);
+                it->second.nats_sub = nullptr;
+            }
+
+            auto cb = std::move(it->second.callback);
+            tls.pending.erase(it);
+            if (cb && *cb)
+                (*cb)(NatsError::RequestFailed, {});
+        }
+        return;
+    }
+
+    // ── 5. Timeout timer on the requesting worker's TimerManager ──
+    auto cur = WorkerManager::Instance()->GetCurWorker();
+    if (cur)
+    {
+        int64_t timer_id = cur->GetTimerManager()->RegisterTimer(
+            timeout,
+            [inbox]() {
+                auto& tls = tlsNats();
+                auto it = tls.pending.find(inbox);
+                if (it == tls.pending.end())
+                    return;
+
+                natsSubscription_Unsubscribe(it->second.nats_sub);
+                natsSubscription_Destroy(it->second.nats_sub);
+
+                auto promise = std::move(it->second.promise);
+                auto callback = std::move(it->second.callback);
+                tls.pending.erase(it);
+
+                if (promise)
+                    promise->setValue(
+                        NatsResult<std::vector<uint8_t>>{NatsError::Timeout});
+                if (callback && *callback)
+                    (*callback)(NatsError::Timeout, {});
+            },
+            false);
+
+        auto& tls = tlsNats();
+        auto it = tls.pending.find(inbox);
+        if (it != tls.pending.end())
+            it->second.timer_id = timer_id;
+    }
 }
 
 int NatsManager::Connect(const std::string& url)
@@ -623,10 +721,18 @@ void NatsManager::OnNatsInboxMsg(natsConnection*  /*nc*/,
 
             // Fulfill the promise
             auto promise = std::move(it->second.promise);
+            auto callback = std::move(it->second.callback);
             tls.pending.erase(it);
-            promise->setValue(
-                NatsResult<std::vector<uint8_t>>{
-                    NatsError::OK, std::move(body)});
+            if (promise)
+            {
+                promise->setValue(
+                    NatsResult<std::vector<uint8_t>>{
+                        NatsError::OK, body});
+            }
+            if (callback && *callback)
+            {
+                (*callback)(NatsError::OK, std::move(body));
+            }
         });
 }
 

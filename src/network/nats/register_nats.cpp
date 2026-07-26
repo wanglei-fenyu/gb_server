@@ -197,4 +197,219 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
             NatsManager::Instance()->Subscribe(subject, std::move(handler));
         }
     );
+
+    // ── AsyncRequest ───────────────────────────────────────────────
+    // AsyncRequest(subject, meta_bytes, data_str, callback(err, body_str), timeout_ms?)
+    auto async_request = [](const std::string&          subject,
+                            const std::vector<uint8_t>& meta_bytes,
+                            const std::string&          data_str,
+                            sol::function               callback,
+                            sol::optional<int>          timeout_ms) {
+        if (!callback.valid())
+            return;
+
+        Meta meta{};
+        if (meta_bytes.size() >= sizeof(meta))
+            std::memcpy(&meta, meta_bytes.data(), sizeof(meta));
+
+        std::vector<uint8_t> data(data_str.begin(), data_str.end());
+        auto cb_ptr = std::make_shared<sol::function>(std::move(callback));
+
+        NatsManager::Instance()->AsyncRequest(
+            subject,
+            meta,
+            data,
+            [cb_ptr](int ec, std::vector<uint8_t> body) {
+                if (!cb_ptr || !cb_ptr->valid())
+                    return;
+
+                if (ec != NatsError::OK)
+                {
+                    (*cb_ptr)("nats request failed", sol::lua_nil);
+                    return;
+                }
+
+                std::string body_str(reinterpret_cast<const char*>(body.data()), body.size());
+                (*cb_ptr)("", body_str);
+            },
+            std::chrono::milliseconds(timeout_ms.value_or(5000)));
+    };
+
+    nats["AsyncRequest"] = async_request;
+
+    // AsyncRequestMsgpack(subject, meta_bytes, ...[, timeout_ms], callback)
+    // callback(err, unpacked...)
+    nats["AsyncRequestMsgpack"] = [scriptPtr](const std::string& subject,
+                                               const std::vector<uint8_t>& meta_bytes,
+                                               sol::variadic_args args) {
+        std::vector<sol::object> argv;
+        argv.reserve(static_cast<size_t>(args.size()));
+        for (auto it = args.begin(); it != args.end(); ++it)
+            argv.emplace_back(*it);
+
+        if (argv.empty() || !argv.back().is<sol::function>())
+        {
+            LOG_ERROR("[Lua] AsyncRequestMsgpack: missing callback");
+            return;
+        }
+
+        sol::function callback = argv.back().as<sol::function>();
+        argv.pop_back();
+
+        int timeout_ms = 5000;
+        if (!argv.empty() && argv.back().is<int>())
+        {
+            timeout_ms = argv.back().as<int>();
+            argv.pop_back();
+        }
+
+        sol::state_view lua(scriptPtr->lua_state());
+        sol::table req_vals = lua.create_table();
+        for (size_t i = 0; i < argv.size(); ++i)
+            req_vals[i + 1] = argv[i];
+
+        std::vector<uint8_t> req_data = gb::msgpack::pack(req_vals);
+        std::string req_payload(reinterpret_cast<const char*>(req_data.data()), req_data.size());
+
+        async_request(subject, meta_bytes, req_payload, std::move(callback), timeout_ms);
+    };
+
+    // AsyncRequestProto(subject, meta_bytes, request_proto_obj, response_proto_name[, timeout_ms], callback)
+    // callback(err, response_proto_obj)
+    nats["AsyncRequestProto"] = [scriptPtr](const std::string&          subject,
+                                             const std::vector<uint8_t>& meta_bytes,
+                                             sol::object                  request_obj,
+                                             const std::string&           response_proto,
+                                             sol::variadic_args           args) {
+        std::vector<sol::object> argv;
+        argv.reserve(static_cast<size_t>(args.size()));
+        for (auto it = args.begin(); it != args.end(); ++it)
+            argv.emplace_back(*it);
+
+        if (argv.empty() || !argv.back().is<sol::function>())
+        {
+            LOG_ERROR("[Lua] AsyncRequestProto: missing callback");
+            return;
+        }
+
+        sol::function callback = argv.back().as<sol::function>();
+        argv.pop_back();
+
+        int timeout_ms = 5000;
+        if (!argv.empty() && argv.back().is<int>())
+        {
+            timeout_ms = argv.back().as<int>();
+            argv.pop_back();
+        }
+
+        google::protobuf::Message* req_msg = request_obj.as<google::protobuf::Message*>();
+        if (!req_msg)
+        {
+            callback("invalid protobuf request", sol::lua_nil);
+            return;
+        }
+
+        std::string req_payload;
+        if (!req_msg->SerializeToString(&req_payload))
+        {
+            callback("protobuf serialize failed", sol::lua_nil);
+            return;
+        }
+
+        auto cb_ptr = std::make_shared<sol::function>(std::move(callback));
+        async_request(subject, meta_bytes, req_payload,
+            [scriptPtr, cb_ptr, response_proto](const std::string& err, sol::object body_obj) {
+                if (!cb_ptr || !cb_ptr->valid())
+                    return;
+
+                if (!err.empty())
+                {
+                    (*cb_ptr)(err, sol::lua_nil);
+                    return;
+                }
+
+                if (!body_obj.is<std::string>())
+                {
+                    (*cb_ptr)("invalid response body", sol::lua_nil);
+                    return;
+                }
+
+                std::string body = body_obj.as<std::string>();
+                sol::state_view lua(scriptPtr->lua_state());
+                sol::object create_msg_fn_obj = lua["create_msg"];
+                if (!create_msg_fn_obj.valid() || !create_msg_fn_obj.is<sol::function>())
+                {
+                    (*cb_ptr)("create_msg not found", sol::lua_nil);
+                    return;
+                }
+
+                sol::function create_msg_fn = create_msg_fn_obj.as<sol::function>();
+                sol::object rsp_obj = create_msg_fn(response_proto);
+                google::protobuf::Message* rsp_msg = rsp_obj.as<google::protobuf::Message*>();
+                if (!rsp_msg || !rsp_msg->ParseFromArray(body.data(), static_cast<int>(body.size())))
+                {
+                    (*cb_ptr)("protobuf parse failed", sol::lua_nil);
+                    return;
+                }
+
+                (*cb_ptr)("", rsp_obj);
+            },
+            timeout_ms);
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════
+    // Lua 协程桥接 — nats.Await(method, ...)
+    //
+    // 目前支持：
+    //   nats.Await("Request", subject, meta_bytes, body_str [, timeout_ms])
+    //   nats.Await("RequestMsgpack", subject, meta_bytes, ... [, timeout_ms])
+    //   nats.Await("RequestProto", subject, meta_bytes, request_proto, response_proto_name [, timeout_ms])
+    // ═══════════════════════════════════════════════════════════════════════
+
+    lua_State* L = nats.lua_state();
+    luaL_dostring(L, R"(
+        if not nats.Await then
+            function nats.Await(method, ...)
+                local co = coroutine.running()
+                if not co then
+                    error("nats.Await() must be called from a coroutine")
+                end
+
+                local args = { ... }
+                local results = nil
+                local yielded = false
+
+                local function cb(...)
+                    results = { ... }
+                    if yielded then
+                        local ok, err = coroutine.resume(co)
+                        if not ok then
+                            error("nats.Await() resume failed: " .. tostring(err))
+                        end
+                    end
+                end
+
+                args[#args + 1] = cb
+                if method ~= "Request" and method ~= "RequestMsgpack" and method ~= "RequestProto" then
+                    error("Unknown await method: nats." .. tostring(method))
+                end
+                local async_fn = nats["Async" .. method]
+                if not async_fn then
+                    error("Unknown async method: nats.Async" .. method)
+                end
+
+                async_fn(table.unpack(args))
+
+                if results == nil then
+                    yielded = true
+                    coroutine.yield()
+                    yielded = false
+                end
+
+                return table.unpack(results)
+            end
+        end
+    )");
+
+    LOG_INFO("NATS Lua API registered (async + await)");
 }
