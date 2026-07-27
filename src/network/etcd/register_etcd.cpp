@@ -230,6 +230,10 @@ void register_etcd(std::shared_ptr<Script>& scriptPtr)
         return EtcdManager::Instance()->Unwatch(watch_id);
     };
 
+    etcd["Update"] = []() {
+        EtcdManager::Instance()->Update();
+    };
+
     // ═══════════════════════════════════════════════════════════════════════
     // Lua 协程桥接 — etcd.Await(method, ...)
     //

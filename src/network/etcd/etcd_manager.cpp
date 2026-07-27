@@ -1,13 +1,129 @@
 #include "network/etcd/etcd_manager.h"
+#include "network/http/http_client.h"
 #include "log/log.h"
-#include <etcd/Client.hpp>
 
 #include "async_simple/coro/FutureAwaiter.h"
 
-#include <pplx/pplxtasks.h>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/detached.hpp>
+#include <boost/asio/co_spawn.hpp>
 
+#include <algorithm>
+#include <array>
 #include <chrono>
+#include <condition_variable>
 #include <exception>
+#include <mutex>
+#include <vector>
+
+namespace
+{
+
+static const std::array<int, 256> MakeDecodeTable()
+{
+    static constexpr char CHARS[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::array<int, 256> t{};
+    t.fill(-1);
+    for (int i = 0; i < 64; i++)
+        t[static_cast<unsigned char>(CHARS[i])] = i;
+    return t;
+}
+
+static const std::array<int, 256> BASE64_DECODE_TABLE = MakeDecodeTable();
+static constexpr const char BASE64_CHARS[] =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+std::string Base64EncodeInternal(const std::string& input)
+{
+    std::string result;
+    int val = 0, valb = -6;
+    for (unsigned char c : input)
+    {
+        val = (val << 8) + c;
+        valb += 8;
+        while (valb >= 0)
+        {
+            result.push_back(BASE64_CHARS[(val >> valb) & 0x3F]);
+            valb -= 6;
+        }
+    }
+    if (valb > -6)
+        result.push_back(BASE64_CHARS[((val << 8) >> (valb + 8)) & 0x3F]);
+    while (result.size() % 4)
+        result.push_back('=');
+    return result;
+}
+
+std::string Base64DecodeInternal(const std::string& input)
+{
+    std::string result;
+    int val = 0, valb = -8;
+    for (unsigned char c : input)
+    {
+        if (BASE64_DECODE_TABLE[c] == -1)
+            break;
+        val = (val << 6) + BASE64_DECODE_TABLE[c];
+        valb += 6;
+        if (valb >= 0)
+        {
+            result.push_back(static_cast<char>((val >> valb) & 0xFF));
+            valb -= 8;
+        }
+    }
+    return result;
+}
+
+std::string JsonStr(const char* key, const std::string& value)
+{
+    return std::string("\"") + key + "\":\"" + value + "\"";
+}
+
+std::string JsonFindString(const std::string& json, const char* key)
+{
+    std::string needle = std::string("\"") + key + "\":\"";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos)
+        return {};
+    pos += needle.size();
+    auto end = json.find('"', pos);
+    if (end == std::string::npos)
+        return {};
+    return json.substr(pos, end - pos);
+}
+
+int64_t JsonFindInt64(const std::string& json, const char* key)
+{
+    std::string needle = std::string("\"") + key + "\":";
+    auto pos = json.find(needle);
+    if (pos == std::string::npos)
+        return 0;
+    pos += needle.size();
+    while (pos < json.size() && json[pos] == ' ')
+        ++pos;
+    if (pos >= json.size())
+        return 0;
+    if (json[pos] == '"')
+    {
+        ++pos;
+        auto end = json.find('"', pos);
+        if (end == std::string::npos)
+            return 0;
+        return std::atoll(json.substr(pos, end - pos).c_str());
+    }
+    auto end = pos;
+    while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ' ')
+        ++end;
+    return std::atoll(json.substr(pos, end - pos).c_str());
+}
+
+bool JsonHasKey(const std::string& json, const char* key)
+{
+    std::string needle = std::string("\"") + key + "\"";
+    return json.find(needle) != std::string::npos;
+}
+
+}
 
 NAMESPACE_BEGIN(gb)
 
@@ -18,6 +134,64 @@ EtcdManager::~EtcdManager()
     Disconnect();
 }
 
+std::string EtcdManager::Base64Encode(const std::string& input)
+{
+    return Base64EncodeInternal(input);
+}
+
+std::string EtcdManager::Base64Decode(const std::string& input)
+{
+    return Base64DecodeInternal(input);
+}
+
+std::string EtcdManager::MakeUrl(const std::string& path) const
+{
+    std::string url = endpoint_;
+    if (!url.empty() && url.back() != '/')
+        url.push_back('/');
+    if (!path.empty() && path.front() == '/')
+        url.append(path, 1, std::string::npos);
+    else
+        url.append(path);
+    return url;
+}
+
+void EtcdManager::EnsureHttpThread()
+{
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    if (http_ioc_)
+        return;
+
+    http_ioc_ = std::make_unique<boost::asio::io_context>();
+    auto work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(
+        boost::asio::make_work_guard(*http_ioc_));
+    http_client_ = std::make_unique<HttpClient>(*http_ioc_);
+
+    http_thread_ = std::thread([this, wg = std::move(work_guard)]() {
+        http_ioc_->run();
+    });
+}
+
+void EtcdManager::StopHttpThread()
+{
+    std::unique_ptr<HttpClient> client;
+    std::unique_ptr<boost::asio::io_context> ioc;
+    {
+        std::lock_guard<std::mutex> lock(http_mutex_);
+        client.swap(http_client_);
+        ioc.swap(http_ioc_);
+    }
+
+    if (ioc)
+        ioc->stop();
+
+    if (http_thread_.joinable())
+        http_thread_.join();
+
+    client.reset();
+    ioc.reset();
+}
+
 int EtcdManager::Connect(const std::string& endpoint)
 {
     if (endpoint.empty())
@@ -26,29 +200,59 @@ int EtcdManager::Connect(const std::string& endpoint)
         return EtcdError::InvalidArgument;
     }
 
-    try
-    {
-        std::lock_guard<std::mutex> lock(client_mutex_);
-        endpoint_ = endpoint;
-        client_ = std::make_shared<etcd::Client>(endpoint_);
-        connected_.store(true, std::memory_order_release);
-        LOG_INFO("[EtcdManager] connected endpoint={}", endpoint_);
-        return EtcdError::OK;
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("[EtcdManager] connect failed, endpoint={} err={}", endpoint, e.what());
-        connected_.store(false, std::memory_order_release);
-        return EtcdError::RequestFailed;
-    }
+    endpoint_ = endpoint;
+    if (endpoint_.back() != '/')
+        endpoint_.push_back('/');
+
+    EnsureHttpThread();
+    connected_.store(true, std::memory_order_release);
+    LOG_INFO("[EtcdManager] connected endpoint={}", endpoint_);
+    return EtcdError::OK;
 }
 
 void EtcdManager::Disconnect()
 {
-    StopAllWatches();
-    std::lock_guard<std::mutex> lock(client_mutex_);
-    client_.reset();
+    {
+        std::lock_guard<std::mutex> lock(watches_mutex_);
+        watches_.clear();
+    }
+    StopHttpThread();
     connected_.store(false, std::memory_order_release);
+}
+
+std::string EtcdManager::HttpPost(const std::string& path, const std::string& json_body, int& http_status)
+{
+    std::string result;
+    std::mutex mtx;
+    std::condition_variable cv;
+    bool done = false;
+
+    {
+        std::lock_guard<std::mutex> lock(http_mutex_);
+        if (!http_client_)
+        {
+            http_status = -1;
+            return {};
+        }
+
+        std::string url = MakeUrl(path);
+        http_client_->Post(url, json_body,
+            [&](HttpResponse resp) {
+                std::lock_guard<std::mutex> lk(mtx);
+                http_status = resp.status;
+                result = std::move(resp.body);
+                done = true;
+                cv.notify_one();
+            },
+            "application/json");
+    }
+
+    {
+        std::unique_lock<std::mutex> lk(mtx);
+        cv.wait(lk, [&] { return done; });
+    }
+
+    return result;
 }
 
 int EtcdManager::Put(const std::string& key, const std::string& value)
@@ -58,32 +262,27 @@ int EtcdManager::Put(const std::string& key, const std::string& value)
 
 int EtcdManager::PutWithLease(const std::string& key, const std::string& value, int64_t lease_id)
 {
-    auto client = GetClient();
-    if (!client)
-        return EtcdError::RequestFailed;
-
     if (key.empty())
         return EtcdError::InvalidArgument;
+    if (!connected_.load(std::memory_order_acquire))
+        return EtcdError::RequestFailed;
 
-    try
-    {
-        auto response = (lease_id > 0)
-            ? client->set(key, value, lease_id).get()
-            : client->set(key, value).get();
+    std::string body = "{" + JsonStr("key", Base64Encode(key))
+                     + "," + JsonStr("value", Base64Encode(value));
+    if (lease_id > 0)
+        body += ",\"lease\":\"" + std::to_string(lease_id) + "\"";
+    body += "}";
 
-        if (!response.is_ok())
-        {
-            LOG_ERROR("[EtcdManager] put failed, key={} code={} msg={}",
-                      key, response.error_code(), response.error_message());
-            return EtcdError::RequestFailed;
-        }
-        return EtcdError::OK;
-    }
-    catch (const std::exception& e)
+    int http_status = 0;
+    std::string resp = HttpPost("/v3/kv/put", body, http_status);
+
+    if (http_status != 200)
     {
-        LOG_ERROR("[EtcdManager] put exception, key={} err={}", key, e.what());
+        LOG_ERROR("[EtcdManager] put failed, key={} http_status={} resp={}",
+                  key, http_status, resp);
         return EtcdError::RequestFailed;
     }
+    return EtcdError::OK;
 }
 
 int EtcdManager::PutWithTTL(const std::string& key, const std::string& value, int ttl_seconds)
@@ -97,105 +296,94 @@ int EtcdManager::PutWithTTL(const std::string& key, const std::string& value, in
 
 int EtcdManager::Get(const std::string& key, std::string& value)
 {
-    auto client = GetClient();
-    if (!client)
-        return EtcdError::RequestFailed;
-
     if (key.empty())
         return EtcdError::InvalidArgument;
+    if (!connected_.load(std::memory_order_acquire))
+        return EtcdError::RequestFailed;
 
-    try
-    {
-        auto response = client->get(key).get();
-        if (!response.is_ok())
-        {
-            LOG_WARN("[EtcdManager] get miss/fail, key={} code={} msg={}",
-                     key, response.error_code(), response.error_message());
-            return EtcdError::NotFound;
-        }
+    std::string body = "{" + JsonStr("key", Base64Encode(key)) + "}";
 
-        value = response.value().as_string();
-        return EtcdError::OK;
-    }
-    catch (const std::exception& e)
+    int http_status = 0;
+    std::string resp = HttpPost("/v3/kv/range", body, http_status);
+
+    if (http_status != 200)
     {
-        LOG_ERROR("[EtcdManager] get exception, key={} err={}", key, e.what());
+        LOG_ERROR("[EtcdManager] get failed, key={} http_status={} resp={}",
+                  key, http_status, resp);
         return EtcdError::RequestFailed;
     }
+
+    if (JsonHasKey(resp, "kvs"))
+    {
+        auto kv_start = resp.find("[{");
+        if (kv_start != std::string::npos)
+        {
+            auto kv_end = resp.find("}]", kv_start);
+            if (kv_end != std::string::npos)
+            {
+                std::string first_kv = resp.substr(kv_start + 1, kv_end - kv_start);
+                std::string encoded_value = JsonFindString(first_kv, "value");
+                if (!encoded_value.empty())
+                {
+                    value = Base64Decode(encoded_value);
+                    return EtcdError::OK;
+                }
+            }
+        }
+    }
+
+    return EtcdError::NotFound;
 }
 
 int EtcdManager::Delete(const std::string& key)
 {
-    auto client = GetClient();
-    if (!client)
-        return EtcdError::RequestFailed;
-
     if (key.empty())
         return EtcdError::InvalidArgument;
+    if (!connected_.load(std::memory_order_acquire))
+        return EtcdError::RequestFailed;
 
-    try
+    std::string body = "{" + JsonStr("key", Base64Encode(key)) + "}";
+
+    int http_status = 0;
+    std::string resp = HttpPost("/v3/kv/deleterange", body, http_status);
+
+    if (http_status != 200)
     {
-        auto response = client->rm(key).get();
-        if (!response.is_ok())
-        {
-            LOG_ERROR("[EtcdManager] delete failed, key={} code={} msg={}",
-                      key, response.error_code(), response.error_message());
-            return EtcdError::RequestFailed;
-        }
-        return EtcdError::OK;
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("[EtcdManager] delete exception, key={} err={}", key, e.what());
+        LOG_ERROR("[EtcdManager] delete failed, key={} http_status={} resp={}",
+                  key, http_status, resp);
         return EtcdError::RequestFailed;
     }
+    return EtcdError::OK;
 }
 
 int EtcdManager::GrantLease(int ttl_seconds, int64_t& lease_id)
 {
     lease_id = 0;
 
-    auto client = GetClient();
-    if (!client)
-        return EtcdError::RequestFailed;
     if (ttl_seconds <= 0)
         return EtcdError::InvalidArgument;
-
-    try
-    {
-        auto response = client->leasegrant(ttl_seconds).get();
-        if (!response.is_ok())
-        {
-            LOG_ERROR("[EtcdManager] lease grant failed, ttl={} code={} msg={}",
-                      ttl_seconds, response.error_code(), response.error_message());
-            return EtcdError::RequestFailed;
-        }
-
-        lease_id = response.value().lease();
-        return EtcdError::OK;
-    }
-    catch (const std::exception& e)
-    {
-        LOG_ERROR("[EtcdManager] lease grant exception, ttl={} err={}", ttl_seconds, e.what());
-        return EtcdError::RequestFailed;
-    }
-}
-
-int EtcdManager::EnsureClient() const
-{
     if (!connected_.load(std::memory_order_acquire))
         return EtcdError::RequestFailed;
 
-    std::lock_guard<std::mutex> lock(client_mutex_);
-    if (!client_)
-        return EtcdError::RequestFailed;
-    return EtcdError::OK;
-}
+    std::string body = "{\"TTL\":\"" + std::to_string(ttl_seconds) + "\"}";
 
-std::shared_ptr<etcd::Client> EtcdManager::GetClient() const
-{
-    std::lock_guard<std::mutex> lock(client_mutex_);
-    return client_;
+    int http_status = 0;
+    std::string resp = HttpPost("/v3/lease/grant", body, http_status);
+
+    if (http_status != 200)
+    {
+        LOG_ERROR("[EtcdManager] lease grant failed, ttl={} http_status={} resp={}",
+                  ttl_seconds, http_status, resp);
+        return EtcdError::RequestFailed;
+    }
+
+    lease_id = JsonFindInt64(resp, "ID");
+    if (lease_id == 0)
+    {
+        LOG_ERROR("[EtcdManager] lease grant returned id=0, ttl={}", ttl_seconds);
+        return EtcdError::RequestFailed;
+    }
+    return EtcdError::OK;
 }
 
 void EtcdManager::AsyncPut(const std::string& key, const std::string& value, PutCallback callback)
@@ -206,30 +394,30 @@ void EtcdManager::AsyncPut(const std::string& key, const std::string& value, Put
             callback(EtcdError::InvalidArgument);
         return;
     }
-
-    auto client = GetClient();
-    if (!client)
+    if (!connected_.load(std::memory_order_acquire))
     {
         if (callback)
             callback(EtcdError::RequestFailed);
         return;
     }
 
-    client->put(key, value).then([callback = std::move(callback)](pplx::task<etcd::Response> task) mutable {
-        int rc = EtcdError::RequestFailed;
-        try
-        {
-            auto response = task.get();
-            rc = response.error_code();
-        }
-        catch (const std::exception&)
-        {
-            rc = EtcdError::RequestFailed;
-        }
+    std::string body = "{" + JsonStr("key", Base64Encode(key))
+                     + "," + JsonStr("value", Base64Encode(value)) + "}";
 
+    std::string url = MakeUrl("/v3/kv/put");
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    if (!http_client_)
+    {
         if (callback)
-            callback(rc);
-    });
+            callback(EtcdError::RequestFailed);
+        return;
+    }
+    http_client_->Post(url, body,
+        [callback = std::move(callback)](HttpResponse resp) {
+            if (callback)
+                callback(resp.status == 200 ? EtcdError::OK : EtcdError::RequestFailed);
+        },
+        "application/json");
 }
 
 void EtcdManager::AsyncPutWithLease(const std::string& key, const std::string& value, int64_t lease_id, PutCallback callback)
@@ -240,29 +428,31 @@ void EtcdManager::AsyncPutWithLease(const std::string& key, const std::string& v
             callback(EtcdError::InvalidArgument);
         return;
     }
-
-    auto client = GetClient();
-    if (!client)
+    if (!connected_.load(std::memory_order_acquire))
     {
         if (callback)
             callback(EtcdError::RequestFailed);
         return;
     }
 
-    client->put(key, value, lease_id).then([callback = std::move(callback)](pplx::task<etcd::Response> task) mutable {
-        int rc = EtcdError::RequestFailed;
-        try
-        {
-            rc = task.get().error_code();
-        }
-        catch (const std::exception&)
-        {
-            rc = EtcdError::RequestFailed;
-        }
+    std::string body = "{" + JsonStr("key", Base64Encode(key))
+                     + "," + JsonStr("value", Base64Encode(value))
+                     + ",\"lease\":\"" + std::to_string(lease_id) + "\"}";
 
+    std::string url = MakeUrl("/v3/kv/put");
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    if (!http_client_)
+    {
         if (callback)
-            callback(rc);
-    });
+            callback(EtcdError::RequestFailed);
+        return;
+    }
+    http_client_->Post(url, body,
+        [callback = std::move(callback)](HttpResponse resp) {
+            if (callback)
+                callback(resp.status == 200 ? EtcdError::OK : EtcdError::RequestFailed);
+        },
+        "application/json");
 }
 
 void EtcdManager::AsyncPutWithTTL(const std::string& key, const std::string& value, int ttl_seconds, PutCallback callback)
@@ -273,50 +463,21 @@ void EtcdManager::AsyncPutWithTTL(const std::string& key, const std::string& val
             callback(EtcdError::InvalidArgument);
         return;
     }
-
-    auto client = GetClient();
-    if (!client)
+    if (!connected_.load(std::memory_order_acquire))
     {
         if (callback)
             callback(EtcdError::RequestFailed);
         return;
     }
 
-    client->leasegrant(ttl_seconds).then([this, client, key, value, callback = std::move(callback)](pplx::task<etcd::Response> task) mutable {
-        int rc = EtcdError::RequestFailed;
-        try
+    AsyncGrantLease(ttl_seconds, [this, key, value, callback = std::move(callback)](int rc, int64_t lease_id) mutable {
+        if (rc != EtcdError::OK)
         {
-            auto response = task.get();
-            if (!response.is_ok())
-            {
-                rc = response.error_code();
-            }
-            else
-            {
-                auto lease_id = response.value().lease();
-                client->put(key, value, lease_id).then([callback = std::move(callback)](pplx::task<etcd::Response> put_task) mutable {
-                    int put_rc = EtcdError::RequestFailed;
-                    try
-                    {
-                        put_rc = put_task.get().error_code();
-                    }
-                    catch (const std::exception&)
-                    {
-                        put_rc = EtcdError::RequestFailed;
-                    }
-                    if (callback)
-                        callback(put_rc);
-                });
-                return;
-            }
+            if (callback)
+                callback(rc);
+            return;
         }
-        catch (const std::exception&)
-        {
-            rc = EtcdError::RequestFailed;
-        }
-
-        if (callback)
-            callback(rc);
+        AsyncPutWithLease(key, value, lease_id, std::move(callback));
     });
 }
 
@@ -328,33 +489,56 @@ void EtcdManager::AsyncGet(const std::string& key, GetCallback callback)
             callback(EtcdError::InvalidArgument, {});
         return;
     }
-
-    auto client = GetClient();
-    if (!client)
+    if (!connected_.load(std::memory_order_acquire))
     {
         if (callback)
             callback(EtcdError::RequestFailed, {});
         return;
     }
 
-    client->get(key).then([callback = std::move(callback)](pplx::task<etcd::Response> task) mutable {
-        int rc = EtcdError::RequestFailed;
-        std::string value;
-        try
-        {
-            auto response = task.get();
-            rc = response.error_code();
-            if (response.is_ok())
-                value = response.value().as_string();
-        }
-        catch (const std::exception&)
-        {
-            rc = EtcdError::RequestFailed;
-        }
+    std::string body = "{" + JsonStr("key", Base64Encode(key)) + "}";
 
+    std::string url = MakeUrl("/v3/kv/range");
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    if (!http_client_)
+    {
         if (callback)
-            callback(rc, std::move(value));
-    });
+            callback(EtcdError::RequestFailed, {});
+        return;
+    }
+    http_client_->Post(url, body,
+        [callback = std::move(callback)](HttpResponse resp) {
+            if (resp.status != 200)
+            {
+                if (callback)
+                    callback(EtcdError::RequestFailed, {});
+                return;
+            }
+
+            if (JsonHasKey(resp.body, "kvs"))
+            {
+                auto kv_start = resp.body.find("[{");
+                if (kv_start != std::string::npos)
+                {
+                    auto kv_end = resp.body.find("}]", kv_start);
+                    if (kv_end != std::string::npos)
+                    {
+                        std::string first_kv = resp.body.substr(kv_start + 1, kv_end - kv_start);
+                        std::string encoded_value = JsonFindString(first_kv, "value");
+                        if (!encoded_value.empty())
+                        {
+                            if (callback)
+                                callback(EtcdError::OK, Base64Decode(encoded_value));
+                            return;
+                        }
+                    }
+                }
+            }
+
+            if (callback)
+                callback(EtcdError::NotFound, {});
+        },
+        "application/json");
 }
 
 void EtcdManager::AsyncDelete(const std::string& key, PutCallback callback)
@@ -365,29 +549,29 @@ void EtcdManager::AsyncDelete(const std::string& key, PutCallback callback)
             callback(EtcdError::InvalidArgument);
         return;
     }
-
-    auto client = GetClient();
-    if (!client)
+    if (!connected_.load(std::memory_order_acquire))
     {
         if (callback)
             callback(EtcdError::RequestFailed);
         return;
     }
 
-    client->rm(key).then([callback = std::move(callback)](pplx::task<etcd::Response> task) mutable {
-        int rc = EtcdError::RequestFailed;
-        try
-        {
-            rc = task.get().error_code();
-        }
-        catch (const std::exception&)
-        {
-            rc = EtcdError::RequestFailed;
-        }
+    std::string body = "{" + JsonStr("key", Base64Encode(key)) + "}";
 
+    std::string url = MakeUrl("/v3/kv/deleterange");
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    if (!http_client_)
+    {
         if (callback)
-            callback(rc);
-    });
+            callback(EtcdError::RequestFailed);
+        return;
+    }
+    http_client_->Post(url, body,
+        [callback = std::move(callback)](HttpResponse resp) {
+            if (callback)
+                callback(resp.status == 200 ? EtcdError::OK : EtcdError::RequestFailed);
+        },
+        "application/json");
 }
 
 void EtcdManager::AsyncGrantLease(int ttl_seconds, LeaseCallback callback)
@@ -398,33 +582,37 @@ void EtcdManager::AsyncGrantLease(int ttl_seconds, LeaseCallback callback)
             callback(EtcdError::InvalidArgument, 0);
         return;
     }
-
-    auto client = GetClient();
-    if (!client)
+    if (!connected_.load(std::memory_order_acquire))
     {
         if (callback)
             callback(EtcdError::RequestFailed, 0);
         return;
     }
 
-    client->leasegrant(ttl_seconds).then([callback = std::move(callback)](pplx::task<etcd::Response> task) mutable {
-        int rc = EtcdError::RequestFailed;
-        int64_t lease_id = 0;
-        try
-        {
-            auto response = task.get();
-            rc = response.error_code();
-            if (response.is_ok())
-                lease_id = response.value().lease();
-        }
-        catch (const std::exception&)
-        {
-            rc = EtcdError::RequestFailed;
-        }
+    std::string body = "{\"TTL\":\"" + std::to_string(ttl_seconds) + "\"}";
 
+    std::string url = MakeUrl("/v3/lease/grant");
+    std::lock_guard<std::mutex> lock(http_mutex_);
+    if (!http_client_)
+    {
         if (callback)
-            callback(rc, lease_id);
-    });
+            callback(EtcdError::RequestFailed, 0);
+        return;
+    }
+    http_client_->Post(url, body,
+        [callback = std::move(callback)](HttpResponse resp) {
+            if (resp.status != 200)
+            {
+                if (callback)
+                    callback(EtcdError::RequestFailed, 0);
+                return;
+            }
+
+            int64_t lease_id = JsonFindInt64(resp.body, "ID");
+            if (callback)
+                callback(lease_id > 0 ? EtcdError::OK : EtcdError::RequestFailed, lease_id);
+        },
+        "application/json");
 }
 
 async_simple::coro::Lazy<EtcdResult<void>> EtcdManager::CoPut(const std::string& key, const std::string& value)
@@ -501,111 +689,103 @@ async_simple::coro::Lazy<EtcdResult<int64_t>> EtcdManager::CoGrantLease(int ttl_
     co_return co_await std::move(future);
 }
 
+int64_t EtcdManager::NowMs()
+{
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
 int EtcdManager::Watch(const std::string& key, WatchCallback callback, int interval_ms)
 {
-    if (EnsureClient() != EtcdError::OK)
+    if (!connected_.load(std::memory_order_acquire))
         return EtcdError::RequestFailed;
     if (key.empty() || !callback)
         return EtcdError::InvalidArgument;
     if (interval_ms < 100)
         interval_ms = 100;
 
-    auto task = std::make_shared<WatchTask>();
-    task->watch_id = next_watch_id_.fetch_add(1, std::memory_order_relaxed);
-    task->key = key;
-    task->callback = std::move(callback);
-    task->interval_ms = interval_ms;
-
-    task->thread = std::thread([this, task]() {
-        while (!task->stop.load(std::memory_order_acquire))
-        {
-            std::string value;
-            int rc = Get(task->key, value);
-
-            if (rc == EtcdError::OK)
-            {
-                if (!task->initialized)
-                {
-                    task->initialized = true;
-                    task->has_value = true;
-                    task->last_value = value;
-                }
-                else if (!task->has_value || task->last_value != value)
-                {
-                    task->has_value = true;
-                    task->last_value = value;
-                    task->callback(task->key, value, false);
-                }
-            }
-            else if (rc == EtcdError::NotFound)
-            {
-                if (!task->initialized)
-                {
-                    task->initialized = true;
-                    task->has_value = false;
-                    task->last_value.clear();
-                }
-                else if (task->has_value)
-                {
-                    task->has_value = false;
-                    task->last_value.clear();
-                    task->callback(task->key, "", true);
-                }
-            }
-
-            std::this_thread::sleep_for(std::chrono::milliseconds(task->interval_ms));
-        }
-    });
+    auto entry = std::make_shared<WatchEntry>();
+    entry->watch_id = next_watch_id_.fetch_add(1, std::memory_order_relaxed);
+    entry->key = key;
+    entry->callback = std::move(callback);
+    entry->interval_ms = interval_ms;
+    entry->last_poll_ms = NowMs();
 
     {
         std::lock_guard<std::mutex> lock(watches_mutex_);
-        watches_[task->watch_id] = task;
+        watches_.push_back(entry);
     }
 
-    LOG_INFO("[EtcdManager] watch started, id={} key={} interval_ms={}",
-             task->watch_id, task->key, task->interval_ms);
-    return task->watch_id;
+    LOG_INFO("[EtcdManager] watch registered, id={} key={} interval_ms={}",
+             entry->watch_id, entry->key, entry->interval_ms);
+    return entry->watch_id;
 }
 
 int EtcdManager::Unwatch(int watch_id)
 {
-    std::shared_ptr<WatchTask> task;
-    {
-        std::lock_guard<std::mutex> lock(watches_mutex_);
-        auto it = watches_.find(watch_id);
-        if (it == watches_.end())
-            return EtcdError::NotFound;
-        task = std::move(it->second);
-        watches_.erase(it);
-    }
+    std::lock_guard<std::mutex> lock(watches_mutex_);
+    auto it = std::find_if(watches_.begin(), watches_.end(),
+        [watch_id](const std::shared_ptr<WatchEntry>& e) { return e->watch_id == watch_id; });
+    if (it == watches_.end())
+        return EtcdError::NotFound;
 
-    task->stop.store(true, std::memory_order_release);
-    if (task->thread.joinable())
-        task->thread.join();
-
-    LOG_INFO("[EtcdManager] watch stopped, id={} key={}", watch_id, task->key);
+    LOG_INFO("[EtcdManager] watch removed, id={}", watch_id);
+    watches_.erase(it);
     return EtcdError::OK;
 }
 
-void EtcdManager::StopAllWatches()
+void EtcdManager::Update()
 {
-    std::unordered_map<int, std::shared_ptr<WatchTask>> tasks;
+    if (!connected_.load(std::memory_order_acquire))
+        return;
+
+    int64_t now = NowMs();
+
+    std::vector<std::shared_ptr<WatchEntry>> snapshot;
     {
         std::lock_guard<std::mutex> lock(watches_mutex_);
-        tasks.swap(watches_);
+        snapshot = watches_;
     }
 
-    for (auto& kv : tasks)
+    for (auto& entry : snapshot)
     {
-        auto& task = kv.second;
-        task->stop.store(true, std::memory_order_release);
-    }
+        if (now - entry->last_poll_ms < entry->interval_ms)
+            continue;
+        entry->last_poll_ms = now;
 
-    for (auto& kv : tasks)
-    {
-        auto& task = kv.second;
-        if (task->thread.joinable())
-            task->thread.join();
+        std::string value;
+        int rc = Get(entry->key, value);
+
+        if (rc == EtcdError::OK)
+        {
+            if (!entry->initialized)
+            {
+                entry->initialized = true;
+                entry->has_value = true;
+                entry->last_value = value;
+            }
+            else if (!entry->has_value || entry->last_value != value)
+            {
+                entry->has_value = true;
+                entry->last_value = value;
+                entry->callback(entry->key, value, false);
+            }
+        }
+        else if (rc == EtcdError::NotFound)
+        {
+            if (!entry->initialized)
+            {
+                entry->initialized = true;
+                entry->has_value = false;
+                entry->last_value.clear();
+            }
+            else if (entry->has_value)
+            {
+                entry->has_value = false;
+                entry->last_value.clear();
+                entry->callback(entry->key, "", true);
+            }
+        }
     }
 }
 

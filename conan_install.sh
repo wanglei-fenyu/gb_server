@@ -9,7 +9,7 @@ cd "$SCRIPT_DIR"
 
 PROFILE_HOST="profiles/clang_debug_pr"
 PROFILE_BUILD="profiles/clang_debug_pr"
-CPPSTD="gnu23"
+CPPSTD="23"
 BUILD_MISSING=1
 DO_CLEAN=0
 

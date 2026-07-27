@@ -14,8 +14,8 @@ class GBServer(ConanFile):
     def requirements(self):
         # 其他依赖...
         self.requires("spdlog/1.15.0")
-        self.requires("boost/1.83.0", override=True)
-        self.requires("protobuf/5.28.3", override=True)
+        self.requires("boost/1.90.0")
+        self.requires("protobuf/3.21.12")
         self.requires("openssl/3.0.13")        
         self.requires("zlib/1.3.1")           
         self.requires("async_simple/1.4")
@@ -29,5 +29,6 @@ class GBServer(ConanFile):
         self.requires("libpq/17.7")
         self.requires("catch2/3.15.0")
         self.requires("cnats/3.12.0")
-        self.requires("etcd-cpp-apiv3/0.15.4")
-
+        #self.requires("abseil/20230125.0",override=True)
+        #self.requires("grpc/1.54.3", override=True)
+        #self.requires("etcd-cpp-apiv3/0.15.4")

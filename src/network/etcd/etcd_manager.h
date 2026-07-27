@@ -1,20 +1,25 @@
 #pragma once
 
+#include "define/def.h"
 #include "base/singleton.h"
 #include "async_simple/Promise.h"
 #include "async_simple/coro/Lazy.h"
 #include <atomic>
 #include <cstdint>
 #include <functional>
-#include <thread>
-#include <unordered_map>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <vector>
 
-namespace etcd
+namespace boost::asio
 {
-class Client;
+class io_context;
+}
+
+namespace gb
+{
+class HttpClient;
 }
 
 NAMESPACE_BEGIN(gb)
@@ -52,6 +57,7 @@ public:
     EtcdManager(const EtcdManager&) = delete;
     EtcdManager& operator=(const EtcdManager&) = delete;
 
+    /// Connect to etcd via HTTP API endpoint, e.g. "http://127.0.0.1:2379"
     int Connect(const std::string& endpoint);
     void Disconnect();
     bool IsConnected() const { return connected_.load(std::memory_order_acquire); }
@@ -64,6 +70,9 @@ public:
     int GrantLease(int ttl_seconds, int64_t& lease_id);
     int Watch(const std::string& key, WatchCallback callback, int interval_ms = 1000);
     int Unwatch(int watch_id);
+
+    /// Call once per frame on the main thread — polls all watches
+    void Update();
 
     using PutCallback = std::function<void(int)>;
     using GetCallback = std::function<void(int, std::string)>;
@@ -84,30 +93,40 @@ public:
     async_simple::coro::Lazy<EtcdResult<int64_t>> CoGrantLease(int ttl_seconds);
 
 private:
-    struct WatchTask
+    struct WatchEntry
     {
         int watch_id{0};
         std::string key;
         WatchCallback callback;
         int interval_ms{1000};
-        std::atomic<bool> stop{false};
-        std::thread thread;
-
+        int64_t last_poll_ms{0};
         bool initialized{false};
         bool has_value{false};
         std::string last_value;
     };
 
-    int EnsureClient() const;
-    std::shared_ptr<etcd::Client> GetClient() const;
-    void StopAllWatches();
+    std::string HttpPost(const std::string& path, const std::string& json_body, int& http_status);
+
+    static std::string Base64Encode(const std::string& input);
+    static std::string Base64Decode(const std::string& input);
+
+    std::string MakeUrl(const std::string& path) const;
+
+    void EnsureHttpThread();
+    void StopHttpThread();
+
+    static int64_t NowMs();
 
 private:
     std::string endpoint_;
-    mutable std::mutex client_mutex_;
-    std::shared_ptr<etcd::Client> client_;
+
+    std::unique_ptr<boost::asio::io_context> http_ioc_;
+    std::unique_ptr<HttpClient> http_client_;
+    std::thread http_thread_;
+    std::mutex http_mutex_;
+
     std::mutex watches_mutex_;
-    std::unordered_map<int, std::shared_ptr<WatchTask>> watches_;
+    std::vector<std::shared_ptr<WatchEntry>> watches_;
     std::atomic<int> next_watch_id_{1};
     std::atomic<bool> connected_{false};
 };

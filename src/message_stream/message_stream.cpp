@@ -1,5 +1,5 @@
 #include "message_stream.h"
-#include "../base/endpoint_help.h"
+#include "base/endpoint_help.h"
 #include <algorithm>
 namespace gb
 {

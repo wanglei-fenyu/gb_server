@@ -1,8 +1,8 @@
 #include "ssl_byte_stream.h"
-#include "../buffer/buffer.h"
-#include"../buffer/tran_buf_pool.h"
-#include "../base/atomic.h"
-#include "../base/endpoint_help.h"
+#include "buffer/buffer.h"
+#include "buffer/tran_buf_pool.h"
+#include "base/atomic.h"
+#include "base/endpoint_help.h"
 #include <boost/property_tree/ptree.hpp>
 #include <boost/property_tree/ini_parser.hpp>
 #include <openssl/ssl.h>

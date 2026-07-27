@@ -41,7 +41,6 @@ macro(conan_link_libraries target_name)
         cxxopts::cxxopts
         PostgreSQL::PostgreSQL
         cnats::nats_static
-        etcd-cpp-apiv3::etcd-cpp-apiv3
     )
 
 endmacro()

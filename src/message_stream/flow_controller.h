@@ -1,5 +1,5 @@
 #pragma once 
-#include "../common/common.h"
+#include "define/define.h"
 #include <atomic>
 #include <memory>
 

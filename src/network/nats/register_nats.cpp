@@ -239,7 +239,7 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
 
     // AsyncRequestMsgpack(subject, meta_bytes, ...[, timeout_ms], callback)
     // callback(err, unpacked...)
-    nats["AsyncRequestMsgpack"] = [scriptPtr](const std::string& subject,
+    nats["AsyncRequestMsgpack"] = [scriptPtr, &async_request](const std::string& subject,
                                                const std::vector<uint8_t>& meta_bytes,
                                                sol::variadic_args args) {
         std::vector<sol::object> argv;
@@ -317,24 +317,28 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
         }
 
         auto cb_ptr = std::make_shared<sol::function>(std::move(callback));
-        async_request(subject, meta_bytes, req_payload,
-            [scriptPtr, cb_ptr, response_proto](const std::string& err, sol::object body_obj) {
+
+        Meta meta{};
+        if (meta_bytes.size() >= sizeof(meta))
+            std::memcpy(&meta, meta_bytes.data(), sizeof(meta));
+
+        std::vector<uint8_t> req_data(req_payload.begin(), req_payload.end());
+        sol::state_view lua(scriptPtr->lua_state());
+        NatsManager::Instance()->AsyncRequest(
+            subject,
+            meta,
+            req_data,
+            [scriptPtr, cb_ptr, response_proto](int ec, std::vector<uint8_t> body) {
                 if (!cb_ptr || !cb_ptr->valid())
                     return;
 
-                if (!err.empty())
+                if (ec != NatsError::OK)
                 {
-                    (*cb_ptr)(err, sol::lua_nil);
+                    (*cb_ptr)("nats request failed", sol::lua_nil);
                     return;
                 }
 
-                if (!body_obj.is<std::string>())
-                {
-                    (*cb_ptr)("invalid response body", sol::lua_nil);
-                    return;
-                }
-
-                std::string body = body_obj.as<std::string>();
+                std::string body_str(reinterpret_cast<const char*>(body.data()), body.size());
                 sol::state_view lua(scriptPtr->lua_state());
                 sol::object create_msg_fn_obj = lua["create_msg"];
                 if (!create_msg_fn_obj.valid() || !create_msg_fn_obj.is<sol::function>())
@@ -354,7 +358,7 @@ void register_nats(std::shared_ptr<Script>& scriptPtr)
 
                 (*cb_ptr)("", rsp_obj);
             },
-            timeout_ms);
+            std::chrono::milliseconds(timeout_ms));
     };
 
     // ═══════════════════════════════════════════════════════════════════════

@@ -88,7 +88,7 @@ private:
         const std::string&       content_type);
 
     boost::asio::io_context& ioc_;
-    asio::ssl::context       ssl_ctx_;
+    boost::asio::ssl::context ssl_ctx_;
     Timeouts                 timeouts_;
 };
 

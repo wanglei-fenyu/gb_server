@@ -1,12 +1,12 @@
 #include "byte_stream.h"
-#include "../buffer/buffer.h"
-#include"../buffer/tran_buf_pool.h"
-#include "../base/atomic.h"
-#include "../base/endpoint_help.h"
+#include "buffer/buffer.h"
+#include "buffer/tran_buf_pool.h"
+#include "base/atomic.h"
+#include "base/endpoint_help.h"
 namespace gb
 {
 
-
+    
 
  ByteStream::ByteStream(NET_TYPE net_type,IoService& ios, const Endpoint& endpoint)
 	 : _io_service(ios)

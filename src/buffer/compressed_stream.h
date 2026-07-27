@@ -1,7 +1,7 @@
 #pragma once 
 #include <google/protobuf/io/zero_copy_stream.h>
-#include "../define/def.h"
-#include "../define/define.h"
+#include "define/def.h"
+#include "define/define.h"
 #include "compressed_def.h"
 namespace gb
 {
