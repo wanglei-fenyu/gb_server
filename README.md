@@ -3,24 +3,25 @@ c++ 网络游戏服务器框架
 
 # 编译
 ## windows
-    1. 设置profile
-    2. 执行 install_deps.bat
-    3. conan install . -pr=profiles/msvc_debug_pr --build=missing
-    4. cmake --preset conan-debug
-    5. cmake --build --preset conan-debug --parallel 或者可以用vs打开cmake文件
-    注意*: vs2026环境不会默认安装到系统环境，执行以上命令需要到 Command Prompt for VS下运行
+    注意*: vs2026环境不会默认安装到系统环境，执行以上命令需要到 x64 Native Tools Command Prompt for VS下运行
+    1. 设置profile (主要设置msvc工具链的路径，需要根据情况修改)
+    2. conan install . -pr=profiles/msvc_debug_pr --build=missing
+    3. cmake --preset conan-debug
+    4. cmake --build --preset conan-debug --parallel 或者可以用vs打开cmake文件
+    
 
 
 ## linux
-    1. 设置profile,添加下面两行 conan有个bug Conan + Boost 1.90 的 recipe 在初始化阶段就不兼容 cobalt 模块, 取消boost charconv模块的float128支持
+    注意*: linux下默认python环境可能不让安装conan,需要建一个虚拟环境，之后每次操作都是在这个虚拟环境下进行
+    1. 设置profile,添加下面两行 conan有个bug Conan + Boost 1.90 的 recipe 在初始化阶段就不兼容 cobalt 模块，
+        取消boost charconv模块的float128支持 （这里只是说明下预设profile文件已经设置好了，这一步可以跳过）
         [options]
         boost/*:without_cobalt=True
         [conf]
         tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]
-    2. 执行 install_deps.sh
-    3. conan install . -pr=profiles/clang_debug_pr --build=missing
-    4. cmake --preset conan-debug
-    5. cmake --build --preset conan-debug --parallel
+    2. conan install . -pr=profiles/clang_debug_pr --build=missing
+    3. cmake --preset conan-debug
+    4. cmake --build --preset conan-debug --parallel
 
 ---
 
