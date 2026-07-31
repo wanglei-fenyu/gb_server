@@ -184,6 +184,7 @@ void register_etcd(std::shared_ptr<Script>& scriptPtr)
     };
 
     // Watch(key, callback[, interval_ms]) -> watch_id | nil
+    // 轮询式 watch：内部按 interval_ms 周期调用 Get()，并不使用 etcd /v3/watch 流式接口。
     // callback(event): event = { key=..., value=..., deleted=true|false, type="put"|"delete" }
     etcd["Watch"] = [scriptPtr](const std::string& key, sol::function callback, sol::optional<int> interval_ms) -> sol::object {
         if (!callback.valid())
@@ -230,6 +231,7 @@ void register_etcd(std::shared_ptr<Script>& scriptPtr)
         return EtcdManager::Instance()->Unwatch(watch_id);
     };
 
+    // 驱动轮询 watch 的更新；需要在主循环中定期调用。
     etcd["Update"] = []() {
         EtcdManager::Instance()->Update();
     };
