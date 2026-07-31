@@ -36,7 +36,7 @@ macro(conan_link_libraries target_name)
         async_simple::async_simple_header_only
         concurrentqueue::concurrentqueue
         glaze::glaze
-        rapidxml::rapidxml
+        pugixml::pugixml
         sol2::sol2
         cxxopts::cxxopts
         PostgreSQL::PostgreSQL

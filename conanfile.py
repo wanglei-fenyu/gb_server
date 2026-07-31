@@ -23,7 +23,7 @@ class GBServer(ConanFile):
         self.requires("lua/5.4.6")
         self.requires("mimalloc/2.1.2")
         self.requires("glaze/7.8.4")
-        self.requires("rapidxml/1.13")
+        self.requires("pugixml/1.16")
         self.requires("sol2/3.5.0")
         self.requires("cxxopts/3.3.1")
         self.requires("libpq/17.7")
