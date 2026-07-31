@@ -6,6 +6,8 @@
 #include "lock_free_route_table.h"
 #include "network/rpc/executor.h"
 #include <functional>
+#include <atomic>
+#include <memory>
 #include <shared_mutex>
 namespace gb
 {
@@ -26,6 +28,8 @@ namespace gb
 		void SetServiceTypeResolver(std::function<ServiceWorkerType(MessageType)> resolver);
 		void SetRouteKeySelector(std::function<uint64_t(MessageType, uint64_t)> selector);
 		void SetWorkerIndexSelector(std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> selector);
+
+		void Freeze();
 
 		/// 统一路由入口：
 		///   user_unique_id == 0：系统消息（etcd 等）→ main_worker_（主线程）
@@ -58,6 +62,11 @@ namespace gb
 	private:
 		WorkerWeakPtr PickWorker(const std::vector<WorkerWeakPtr>& workers, MessageType message_type, uint64_t route_id) const;
 
+		struct FrozenStrategy {
+			std::function<uint64_t(MessageType, uint64_t)> route_key_selector;
+			std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> worker_index_selector;
+		};
+
 	private:
 		Policy policy_ = Policy::Stateless;
 
@@ -66,8 +75,8 @@ namespace gb
 		std::function<uint64_t(MessageType, uint64_t)>  route_key_selector_;
 		std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> worker_index_selector_;
 
-		/// 无锁实体路由表（entity_id → WorkerIndex）
 		LockFreeRouteTable entity_route_table_;
+		std::atomic<std::shared_ptr<const FrozenStrategy>> frozen_strategy_{nullptr};
 	};
 
 }

@@ -93,6 +93,11 @@ struct SyncHttpPostState
     bool done{false};
 };
 
+
+}
+
+NAMESPACE_BEGIN(gb)
+
 // Minimal structs for Glaze JSON deserialization of etcd responses.
 // Fields not listed here are silently ignored via kLaxJsonOpts.
 struct GlzKvEntry
@@ -143,11 +148,6 @@ int ParseLeaseId(const std::string& response_body, int64_t& lease_id)
         return gb::EtcdError::DecodeFailed;
     return gb::EtcdError::OK;
 }
-
-}
-
-NAMESPACE_BEGIN(gb)
-
 EtcdManager::EtcdManager() = default;
 
 EtcdManager::~EtcdManager()

@@ -264,6 +264,7 @@ void NetworkManager::Freeze()
     }
     frozen_listen_map_.store(listen_snapshot, std::memory_order_release);
     frozen_rpc_interface_map_.store(rpc_snapshot, std::memory_order_release);
+    router_.Freeze();
     LOG_INFO("NetworkManager frozen: {} listeners, {} RPC methods",
              listen_snapshot->size(), rpc_snapshot->size());
 }

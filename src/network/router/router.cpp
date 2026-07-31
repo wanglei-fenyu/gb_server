@@ -26,10 +26,39 @@ namespace gb
         worker_index_selector_ = std::move(selector);
     }
 
+    void Router::Freeze()
+    {
+        route_table_.Freeze();
+
+        auto frozen = std::make_shared<FrozenStrategy>();
+        {
+            std::lock_guard<std::shared_mutex> lock(strategy_mutex_);
+            frozen->route_key_selector    = route_key_selector_;
+            frozen->worker_index_selector = worker_index_selector_;
+        }
+        frozen_strategy_.store(frozen, std::memory_order_release);
+    }
+
     WorkerWeakPtr Router::PickWorker(const std::vector<WorkerWeakPtr>& workers, MessageType message_type, uint64 route_id) const
     {
         if (workers.empty())
             return {};
+
+        auto frozen = frozen_strategy_.load(std::memory_order_acquire);
+        if (frozen)
+        {
+            if (frozen->worker_index_selector)
+            {
+                size_t index = frozen->worker_index_selector(workers, message_type, route_id);
+                if (index < workers.size())
+                    return workers[index];
+                return {};
+            }
+            uint64_t route_key = frozen->route_key_selector
+                ? frozen->route_key_selector(message_type, route_id)
+                : route_id;
+            return workers[route_key % workers.size()];
+        }
 
         std::function<size_t(const std::vector<WorkerWeakPtr>&, MessageType, uint64_t)> worker_index_selector;
         std::function<uint64_t(MessageType, uint64_t)> route_key_selector;
@@ -61,7 +90,6 @@ namespace gb
 
 	WorkerExecutor Router::GetExecutor(uint32_t message_type, uint64_t user_unique_id) const
 	{
-		// user_unique_id == 0：系统消息（etcd 等）→ 主线程 Worker
 		if (user_unique_id == 0)
 		{
 			auto main_worker = WorkerManager::Instance()->GetMainWorker();
@@ -77,7 +105,6 @@ namespace gb
 
 		if (policy_ == Policy::Stateful)
 		{
-			// 精确绑定查找，未命中 → 丢弃
 			uint32_t worker_index = entity_route_table_.Lookup(user_unique_id);
 			if (worker_index != LockFreeRouteTable::kInvalidWorker)
 			{
@@ -89,18 +116,17 @@ namespace gb
 						return *executor;
 					return WorkerExecutor::Worker(worker);
 				}
-				// worker 已析构：丢弃
 				return {};
 			}
 			return {};
 		}
 
 		// Policy::Stateless：纯 hash 路由
-		auto workers = route_table_.GetWorker(route_table_.ResolveServiceWorkerType((MessageType)message_type));
-		if (workers.empty())
+		auto* workers = route_table_.GetWorkerRef(route_table_.ResolveServiceWorkerType((MessageType)message_type));
+		if (!workers || workers->empty())
 			return {};
 
-		auto target = PickWorker(workers, (MessageType)message_type, user_unique_id).lock();
+		auto target = PickWorker(*workers, (MessageType)message_type, user_unique_id).lock();
 		if (!target)
 			return {};
 

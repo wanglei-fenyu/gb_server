@@ -176,13 +176,17 @@ TEST_CASE("route: 自定义 resolver 映射消息类型", "[route][routetable]")
 TEST_CASE("route: RegisterWorker + GetWorker 一对一", "[route][routetable]")
 {
     RouteTable table;
-    // 没有实际 Worker 实例，但 SharedPtr 可以为空测试接口
     std::shared_ptr<Worker> empty;
     table.RegisterWorker(SWT_Normal, empty);
 
     auto workers = table.GetWorker(SWT_Normal);
     REQUIRE(workers.size() == 1);
-    REQUIRE(workers[0].expired());   // 空 shared_ptr 构造的 weak_ptr 已过期
+    REQUIRE(workers[0].expired());
+
+    table.Freeze();
+    auto workers_frozen = table.GetWorker(SWT_Normal);
+    REQUIRE(workers_frozen.size() == 1);
+    REQUIRE(workers_frozen[0].expired());
 }
 
 TEST_CASE("route: RegisterWorker 多 worker 注册", "[route][routetable]")
@@ -196,6 +200,39 @@ TEST_CASE("route: RegisterWorker 多 worker 注册", "[route][routetable]")
     REQUIRE(table.GetWorker(SWT_Normal).size() == 2);
     REQUIRE(table.GetWorker(SWT_AI).size() == 1);
     REQUIRE(table.GetWorker(SWT_Navigation).size() == 0);
+
+    table.Freeze();
+    REQUIRE(table.GetWorker(SWT_Normal).size() == 2);
+    REQUIRE(table.GetWorker(SWT_AI).size() == 1);
+    REQUIRE(table.GetWorker(SWT_Navigation).size() == 0);
+}
+
+TEST_CASE("route: GetWorkerRef zero-copy after freeze", "[route][routetable]")
+{
+    RouteTable table;
+    std::shared_ptr<Worker> w1;
+    table.RegisterWorker(SWT_Normal, w1);
+
+    REQUIRE(table.GetWorkerRef(SWT_Normal) == nullptr);
+
+    table.Freeze();
+    auto* ref = table.GetWorkerRef(SWT_Normal);
+    REQUIRE(ref != nullptr);
+    REQUIRE(ref->size() == 1);
+    REQUIRE(table.GetWorkerRef(SWT_Navigation) == nullptr);
+}
+
+TEST_CASE("route: ResolveServiceWorkerType frozen path", "[route][routetable]")
+{
+    RouteTable table;
+    table.SetServiceTypeResolver([](MessageType type) -> ServiceWorkerType {
+        if (type >= 10000 && type < 20000) return SWT_AI;
+        return SWT_Normal;
+    });
+    table.Freeze();
+
+    REQUIRE(table.ResolveServiceWorkerType(MT_Login) == SWT_Normal);
+    REQUIRE(table.ResolveServiceWorkerType(MT_AI_Skill) == SWT_AI);
 }
 
 // ============================================================
