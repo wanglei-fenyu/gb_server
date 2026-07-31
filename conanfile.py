@@ -22,7 +22,7 @@ class GBServer(ConanFile):
         self.requires("concurrentqueue/1.0.5")
         self.requires("lua/5.4.6")
         self.requires("mimalloc/2.1.2")
-        self.requires("rapidjson/1.1.0")
+        self.requires("glaze/7.8.4")
         self.requires("rapidxml/1.13")
         self.requires("sol2/3.5.0")
         self.requires("cxxopts/3.3.1")

@@ -35,7 +35,7 @@ macro(conan_link_libraries target_name)
         mimalloc-static
         async_simple::async_simple_header_only
         concurrentqueue::concurrentqueue
-        rapidjson
+        glaze::glaze
         rapidxml::rapidxml
         sol2::sol2
         cxxopts::cxxopts

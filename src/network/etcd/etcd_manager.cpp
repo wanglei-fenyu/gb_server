@@ -8,7 +8,7 @@
 #include <boost/asio/detached.hpp>
 #include <boost/asio/co_spawn.hpp>
 
-#include <rapidjson/document.h>
+#include "glaze/glaze.hpp"
 
 #include <algorithm>
 #include <array>
@@ -16,7 +16,6 @@
 #include <charconv>
 #include <condition_variable>
 #include <exception>
-#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -94,91 +93,54 @@ struct SyncHttpPostState
     bool done{false};
 };
 
-int ParseJsonDocument(const std::string& json, rapidjson::Document& document)
+// Minimal structs for Glaze JSON deserialization of etcd responses.
+// Fields not listed here are silently ignored via kLaxJsonOpts.
+struct GlzKvEntry
 {
-    document.Parse(json.c_str());
-    if (document.HasParseError() || !document.IsObject())
-        return gb::EtcdError::DecodeFailed;
-    return gb::EtcdError::OK;
-}
+    std::string value{};
+};
 
-int GetInt64Member(const rapidjson::Value& value, const char* key, int64_t& out_value)
+struct GlzRangeResponse
 {
-    auto member = value.FindMember(key);
-    if (member == value.MemberEnd())
-        return gb::EtcdError::DecodeFailed;
+    std::vector<GlzKvEntry> kvs{};
+};
 
-    if (member->value.IsInt64())
-    {
-        out_value = member->value.GetInt64();
-        return gb::EtcdError::OK;
-    }
+struct GlzLeaseGrantResponse
+{
+    std::string ID{};
+};
 
-    if (member->value.IsUint64())
-    {
-        const auto raw_value = member->value.GetUint64();
-        if (raw_value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
-            return gb::EtcdError::DecodeFailed;
-        out_value = static_cast<int64_t>(raw_value);
-        return gb::EtcdError::OK;
-    }
-
-    if (!member->value.IsString())
-        return gb::EtcdError::DecodeFailed;
-
-    const auto* begin = member->value.GetString();
-    const auto* end = begin + member->value.GetStringLength();
-    auto parse_result = std::from_chars(begin, end, out_value);
-    if (parse_result.ec != std::errc() || parse_result.ptr != end)
-        return gb::EtcdError::DecodeFailed;
-
-    return gb::EtcdError::OK;
-}
+static constexpr glz::opts kLaxJsonOpts{.error_on_unknown_keys = false};
 
 int ParseGetValue(const std::string& response_body, std::string& value)
 {
     value.clear();
-
-    rapidjson::Document document;
-    int rc = ParseJsonDocument(response_body, document);
-    if (rc != gb::EtcdError::OK)
-        return rc;
-
-    auto kvs = document.FindMember("kvs");
-    if (kvs == document.MemberEnd())
+    GlzRangeResponse resp{};
+    auto err = glz::read<kLaxJsonOpts>(resp, response_body);
+    if (err)
+        return gb::EtcdError::DecodeFailed;
+    if (resp.kvs.empty())
         return gb::EtcdError::NotFound;
-    if (!kvs->value.IsArray())
-        return gb::EtcdError::DecodeFailed;
-    if (kvs->value.Empty())
-        return gb::EtcdError::NotFound;
-
-    const auto& first_kv = kvs->value[0];
-    if (!first_kv.IsObject())
-        return gb::EtcdError::DecodeFailed;
-
-    auto encoded_value = first_kv.FindMember("value");
-    if (encoded_value == first_kv.MemberEnd() || !encoded_value->value.IsString())
-        return gb::EtcdError::DecodeFailed;
-
-    value = Base64DecodeInternal(encoded_value->value.GetString());
+    value = Base64DecodeInternal(resp.kvs[0].value);
     return gb::EtcdError::OK;
 }
 
 int ParseLeaseId(const std::string& response_body, int64_t& lease_id)
 {
     lease_id = 0;
-
-    rapidjson::Document document;
-    int rc = ParseJsonDocument(response_body, document);
-    if (rc != gb::EtcdError::OK)
-        return rc;
-
-    rc = GetInt64Member(document, "ID", lease_id);
-    if (rc != gb::EtcdError::OK)
-        return rc;
+    GlzLeaseGrantResponse resp{};
+    auto err = glz::read<kLaxJsonOpts>(resp, response_body);
+    if (err)
+        return gb::EtcdError::DecodeFailed;
+    if (resp.ID.empty())
+        return gb::EtcdError::DecodeFailed;
+    const char* begin = resp.ID.data();
+    const char* end   = begin + resp.ID.size();
+    auto [ptr, ec]    = std::from_chars(begin, end, lease_id);
+    if (ec != std::errc() || ptr != end)
+        return gb::EtcdError::DecodeFailed;
     if (lease_id <= 0)
         return gb::EtcdError::DecodeFailed;
-
     return gb::EtcdError::OK;
 }
 
