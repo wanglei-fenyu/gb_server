@@ -8,11 +8,15 @@
 #include <boost/asio/detached.hpp>
 #include <boost/asio/co_spawn.hpp>
 
+#include <rapidjson/document.h>
+
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <charconv>
 #include <condition_variable>
 #include <exception>
+#include <limits>
 #include <mutex>
 #include <vector>
 
@@ -79,48 +83,103 @@ std::string JsonStr(const char* key, const std::string& value)
     return std::string("\"") + key + "\":\"" + value + "\"";
 }
 
-std::string JsonFindString(const std::string& json, const char* key)
+constexpr int kHttpPostTimeoutBufferSeconds = 5;
+
+struct SyncHttpPostState
 {
-    std::string needle = std::string("\"") + key + "\":\"";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos)
-        return {};
-    pos += needle.size();
-    auto end = json.find('"', pos);
-    if (end == std::string::npos)
-        return {};
-    return json.substr(pos, end - pos);
+    std::mutex mutex;
+    std::condition_variable cv;
+    int http_status{-1};
+    std::string body;
+    bool done{false};
+};
+
+int ParseJsonDocument(const std::string& json, rapidjson::Document& document)
+{
+    document.Parse(json.c_str());
+    if (document.HasParseError() || !document.IsObject())
+        return gb::EtcdError::DecodeFailed;
+    return gb::EtcdError::OK;
 }
 
-int64_t JsonFindInt64(const std::string& json, const char* key)
+int GetInt64Member(const rapidjson::Value& value, const char* key, int64_t& out_value)
 {
-    std::string needle = std::string("\"") + key + "\":";
-    auto pos = json.find(needle);
-    if (pos == std::string::npos)
-        return 0;
-    pos += needle.size();
-    while (pos < json.size() && json[pos] == ' ')
-        ++pos;
-    if (pos >= json.size())
-        return 0;
-    if (json[pos] == '"')
+    auto member = value.FindMember(key);
+    if (member == value.MemberEnd())
+        return gb::EtcdError::DecodeFailed;
+
+    if (member->value.IsInt64())
     {
-        ++pos;
-        auto end = json.find('"', pos);
-        if (end == std::string::npos)
-            return 0;
-        return std::atoll(json.substr(pos, end - pos).c_str());
+        out_value = member->value.GetInt64();
+        return gb::EtcdError::OK;
     }
-    auto end = pos;
-    while (end < json.size() && json[end] != ',' && json[end] != '}' && json[end] != ' ')
-        ++end;
-    return std::atoll(json.substr(pos, end - pos).c_str());
+
+    if (member->value.IsUint64())
+    {
+        const auto raw_value = member->value.GetUint64();
+        if (raw_value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max()))
+            return gb::EtcdError::DecodeFailed;
+        out_value = static_cast<int64_t>(raw_value);
+        return gb::EtcdError::OK;
+    }
+
+    if (!member->value.IsString())
+        return gb::EtcdError::DecodeFailed;
+
+    const auto* begin = member->value.GetString();
+    const auto* end = begin + member->value.GetStringLength();
+    auto parse_result = std::from_chars(begin, end, out_value);
+    if (parse_result.ec != std::errc() || parse_result.ptr != end)
+        return gb::EtcdError::DecodeFailed;
+
+    return gb::EtcdError::OK;
 }
 
-bool JsonHasKey(const std::string& json, const char* key)
+int ParseGetValue(const std::string& response_body, std::string& value)
 {
-    std::string needle = std::string("\"") + key + "\"";
-    return json.find(needle) != std::string::npos;
+    value.clear();
+
+    rapidjson::Document document;
+    int rc = ParseJsonDocument(response_body, document);
+    if (rc != gb::EtcdError::OK)
+        return rc;
+
+    auto kvs = document.FindMember("kvs");
+    if (kvs == document.MemberEnd())
+        return gb::EtcdError::NotFound;
+    if (!kvs->value.IsArray())
+        return gb::EtcdError::DecodeFailed;
+    if (kvs->value.Empty())
+        return gb::EtcdError::NotFound;
+
+    const auto& first_kv = kvs->value[0];
+    if (!first_kv.IsObject())
+        return gb::EtcdError::DecodeFailed;
+
+    auto encoded_value = first_kv.FindMember("value");
+    if (encoded_value == first_kv.MemberEnd() || !encoded_value->value.IsString())
+        return gb::EtcdError::DecodeFailed;
+
+    value = Base64DecodeInternal(encoded_value->value.GetString());
+    return gb::EtcdError::OK;
+}
+
+int ParseLeaseId(const std::string& response_body, int64_t& lease_id)
+{
+    lease_id = 0;
+
+    rapidjson::Document document;
+    int rc = ParseJsonDocument(response_body, document);
+    if (rc != gb::EtcdError::OK)
+        return rc;
+
+    rc = GetInt64Member(document, "ID", lease_id);
+    if (rc != gb::EtcdError::OK)
+        return rc;
+    if (lease_id <= 0)
+        return gb::EtcdError::DecodeFailed;
+
+    return gb::EtcdError::OK;
 }
 
 }
@@ -165,7 +224,7 @@ void EtcdManager::EnsureHttpThread()
     http_ioc_ = std::make_unique<boost::asio::io_context>();
     auto work_guard = std::make_unique<boost::asio::executor_work_guard<boost::asio::io_context::executor_type>>(
         boost::asio::make_work_guard(*http_ioc_));
-    http_client_ = std::make_unique<HttpClient>(*http_ioc_);
+    http_client_ = std::make_shared<HttpClient>(*http_ioc_);
 
     http_thread_ = std::thread([this, wg = std::move(work_guard)]() {
         http_ioc_->run();
@@ -174,7 +233,7 @@ void EtcdManager::EnsureHttpThread()
 
 void EtcdManager::StopHttpThread()
 {
-    std::unique_ptr<HttpClient> client;
+    std::shared_ptr<HttpClient> client;
     std::unique_ptr<boost::asio::io_context> ioc;
     {
         std::lock_guard<std::mutex> lock(http_mutex_);
@@ -222,10 +281,8 @@ void EtcdManager::Disconnect()
 
 std::string EtcdManager::HttpPost(const std::string& path, const std::string& json_body, int& http_status)
 {
-    std::string result;
-    std::mutex mtx;
-    std::condition_variable cv;
-    bool done = false;
+    auto state = std::make_shared<SyncHttpPostState>();
+    std::chrono::seconds wait_timeout{1};
 
     {
         std::lock_guard<std::mutex> lock(http_mutex_);
@@ -235,24 +292,41 @@ std::string EtcdManager::HttpPost(const std::string& path, const std::string& js
             return {};
         }
 
+        const auto& timeouts = http_client_->GetTimeouts();
+        const int total_timeout_seconds = std::max(
+            1,
+            timeouts.connect_timeout_seconds +
+                timeouts.read_timeout_seconds +
+                timeouts.write_timeout_seconds +
+                kHttpPostTimeoutBufferSeconds);
+        wait_timeout = std::chrono::seconds(total_timeout_seconds);
+
         std::string url = MakeUrl(path);
         http_client_->Post(url, json_body,
-            [&](HttpResponse resp) {
-                std::lock_guard<std::mutex> lk(mtx);
-                http_status = resp.status;
-                result = std::move(resp.body);
-                done = true;
-                cv.notify_one();
+            [state](HttpResponse resp) {
+                std::lock_guard<std::mutex> lk(state->mutex);
+                state->http_status = resp.status;
+                state->body = std::move(resp.body);
+                state->done = true;
+                state->cv.notify_one();
             },
             "application/json");
     }
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        cv.wait(lk, [&] { return done; });
+        std::unique_lock<std::mutex> lk(state->mutex);
+        if (!state->cv.wait_for(lk, wait_timeout, [state] { return state->done; }))
+        {
+            http_status = -1;
+            LOG_ERROR("[EtcdManager] http post timed out, path={} timeout_ms={}",
+                      path,
+                      std::chrono::duration_cast<std::chrono::milliseconds>(wait_timeout).count());
+            return {};
+        }
     }
 
-    return result;
+    http_status = state->http_status;
+    return state->body;
 }
 
 int EtcdManager::Put(const std::string& key, const std::string& value)
@@ -313,26 +387,10 @@ int EtcdManager::Get(const std::string& key, std::string& value)
         return EtcdError::RequestFailed;
     }
 
-    if (JsonHasKey(resp, "kvs"))
-    {
-        auto kv_start = resp.find("[{");
-        if (kv_start != std::string::npos)
-        {
-            auto kv_end = resp.find("}]", kv_start);
-            if (kv_end != std::string::npos)
-            {
-                std::string first_kv = resp.substr(kv_start + 1, kv_end - kv_start);
-                std::string encoded_value = JsonFindString(first_kv, "value");
-                if (!encoded_value.empty())
-                {
-                    value = Base64Decode(encoded_value);
-                    return EtcdError::OK;
-                }
-            }
-        }
-    }
-
-    return EtcdError::NotFound;
+    int rc = ParseGetValue(resp, value);
+    if (rc == EtcdError::DecodeFailed)
+        LOG_ERROR("[EtcdManager] get decode failed, key={} resp={}", key, resp);
+    return rc;
 }
 
 int EtcdManager::Delete(const std::string& key)
@@ -377,11 +435,11 @@ int EtcdManager::GrantLease(int ttl_seconds, int64_t& lease_id)
         return EtcdError::RequestFailed;
     }
 
-    lease_id = JsonFindInt64(resp, "ID");
-    if (lease_id == 0)
+    int rc = ParseLeaseId(resp, lease_id);
+    if (rc != EtcdError::OK)
     {
-        LOG_ERROR("[EtcdManager] lease grant returned id=0, ttl={}", ttl_seconds);
-        return EtcdError::RequestFailed;
+        LOG_ERROR("[EtcdManager] lease grant decode failed, ttl={} resp={}", ttl_seconds, resp);
+        return rc;
     }
     return EtcdError::OK;
 }
@@ -515,28 +573,14 @@ void EtcdManager::AsyncGet(const std::string& key, GetCallback callback)
                 return;
             }
 
-            if (JsonHasKey(resp.body, "kvs"))
-            {
-                auto kv_start = resp.body.find("[{");
-                if (kv_start != std::string::npos)
-                {
-                    auto kv_end = resp.body.find("}]", kv_start);
-                    if (kv_end != std::string::npos)
-                    {
-                        std::string first_kv = resp.body.substr(kv_start + 1, kv_end - kv_start);
-                        std::string encoded_value = JsonFindString(first_kv, "value");
-                        if (!encoded_value.empty())
-                        {
-                            if (callback)
-                                callback(EtcdError::OK, Base64Decode(encoded_value));
-                            return;
-                        }
-                    }
-                }
-            }
-
             if (callback)
-                callback(EtcdError::NotFound, {});
+            {
+                std::string value;
+                int rc = ParseGetValue(resp.body, value);
+                if (rc == EtcdError::DecodeFailed)
+                    LOG_ERROR("[EtcdManager] async get decode failed, resp={}", resp.body);
+                callback(rc, std::move(value));
+            }
         },
         "application/json");
 }
@@ -608,9 +652,14 @@ void EtcdManager::AsyncGrantLease(int ttl_seconds, LeaseCallback callback)
                 return;
             }
 
-            int64_t lease_id = JsonFindInt64(resp.body, "ID");
             if (callback)
-                callback(lease_id > 0 ? EtcdError::OK : EtcdError::RequestFailed, lease_id);
+            {
+                int64_t lease_id = 0;
+                int rc = ParseLeaseId(resp.body, lease_id);
+                if (rc == EtcdError::DecodeFailed)
+                    LOG_ERROR("[EtcdManager] async lease grant decode failed, resp={}", resp.body);
+                callback(rc, lease_id);
+            }
         },
         "application/json");
 }

@@ -68,10 +68,12 @@ public:
     int Get(const std::string& key, std::string& value);
     int Delete(const std::string& key);
     int GrantLease(int ttl_seconds, int64_t& lease_id);
+    /// Register a polling watch implemented by periodic Get() requests.
+    /// This is not etcd server-side /v3/watch streaming.
     int Watch(const std::string& key, WatchCallback callback, int interval_ms = 1000);
     int Unwatch(int watch_id);
 
-    /// Call once per frame on the main thread — polls all watches
+    /// Call once per frame on the main thread to drive polling watches.
     void Update();
 
     using PutCallback = std::function<void(int)>;
@@ -121,7 +123,7 @@ private:
     std::string endpoint_;
 
     std::unique_ptr<boost::asio::io_context> http_ioc_;
-    std::unique_ptr<HttpClient> http_client_;
+    std::shared_ptr<HttpClient> http_client_;
     std::thread http_thread_;
     std::mutex http_mutex_;
 

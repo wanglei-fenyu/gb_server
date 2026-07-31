@@ -17,8 +17,8 @@ namespace gb
 ///   auto res = co_await client.Get("https://example.com/api");
 ///
 /// 用法（回调）：
-///   HttpClient client(ioc);
-///   client.Get("http://example.com/api", [](HttpResponse res) {
+///   auto client = std::make_shared<HttpClient>(ioc);
+///   client->Get("http://example.com/api", [](HttpResponse res) {
 ///       LOG_INFO("status={} body={}", res.status, res.body);
 ///   });
 class HttpClient : public std::enable_shared_from_this<HttpClient>
