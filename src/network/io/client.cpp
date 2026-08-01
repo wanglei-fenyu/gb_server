@@ -185,6 +185,11 @@ gb::SessionPtr ClientImpl::FindOrCreateStream(const Endpoint& remote_endpoint)
             session->set_connected_callback(asio_bind(&ClientImpl::OnConnected, shared_from_this(), _(1)));
             session->set_received_callback(asio_bind(&ClientImpl::OnReceived, shared_from_this(), _(1),_(2),_(3),_(4)));
             session->set_no_delay(_options.no_delay);
+
+            if (_options.transport_type == TRANSPORT_TYPE::SSL)
+            {
+                session->set_ssl_client_file_path(_options.ssl_ca_file);
+            }
             
             _session_map[remote_endpoint] = session;
             create                        = true;
@@ -231,34 +236,8 @@ void ClientImpl::OnClosed(const SessionPtr& session)
 
 void ClientImpl::OnConnected(const SessionPtr& session)
 {
-  //  if (session->is_ssl_socket())
-  //  {
-  //      auto ssl_sock = session->ssl_socket();
-  //      if (ssl_sock)
-  //      {
-  //          ssl_sock->async_handshake(Asio::ssl::stream_base::client, [this,session](const Error_code& error) {
-  //              if (!error && _connected_callback)
-  //              {
-  //                  _connected_callback(session);
-  //              }
-  //              else
-  //                  NETWORK_LOG("handshake error:{}", error.message());
-
-  //          });
-  //      }
-  //      else
-  //      {
-  //          
-		//	NETWORK_LOG("ssl::sock  not find ssl::socket point");
-  //      }
-  //  }
-  //  else
-  //  {
-		//if (_connected_callback)
-		//	_connected_callback(session);
-  //  }
-	if (_connected_callback)
-		_connected_callback(session);
+    if (_connected_callback)
+        _connected_callback(session);
 }
 
 

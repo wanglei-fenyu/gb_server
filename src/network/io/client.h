@@ -22,6 +22,8 @@ struct ClientOptions
 
     TRANSPORT_TYPE transport_type;  // 传输层类型: TCP / SSL / KCP
 
+    std::string ssl_ca_file;  // SSL CA证书文件路径（仅SSL传输时需要）
+
 	ClientOptions()
 	: work_thread_num(4)
     , callback_thread_num(4)

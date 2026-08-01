@@ -285,6 +285,11 @@ void ServerImpl::OnCreated(const SessionPtr& session)
     session->set_flow_controller(_flow_controller);
     session->set_received_callback(asio_bind(&ServerImpl::OnReceived, shared_from_this(), _(1), _(2), _(3), _(4)));
     session->set_closed_callback(asio_bind(&ServerImpl::OnClosed, shared_from_this(), _(1)));
+
+    if (_options.transport_type == TRANSPORT_TYPE::SSL)
+    {
+        session->set_ssl_server_file_path(_options.ssl_cert_file, _options.ssl_key_file);
+    }
 }
 
 void ServerImpl::OnAccepted(const SessionPtr& session)

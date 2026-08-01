@@ -28,6 +28,9 @@ struct ServerOptions
 
     TRANSPORT_TYPE transport_type;  // 传输层类型:TCP / SSL / KCP
 
+    std::string ssl_cert_file;  // SSL证书链文件路径（仅SSL传输时需要）
+    std::string ssl_key_file;   // SSL私钥文件路径（仅SSL传输时需要）
+
 	ServerOptions()
 	//: work_thread_num(8)
 	: max_connection_count(-1)
