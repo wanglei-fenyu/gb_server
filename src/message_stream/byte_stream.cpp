@@ -3,12 +3,14 @@
 #include "buffer/tran_buf_pool.h"
 #include "base/atomic.h"
 #include "base/endpoint_help.h"
+#include "message_stream/transport/tcp_transport.h"
+#include "message_stream/transport/ssl_transport.h"
 namespace gb
 {
 
     
 
- ByteStream::ByteStream(NET_TYPE net_type,IoService& ios, const Endpoint& endpoint)
+ ByteStream::ByteStream(NET_TYPE net_type,IoService& ios, const Endpoint& endpoint, TRANSPORT_TYPE transport_type)
 	 : _io_service(ios)
      , _net_type(net_type)
 	 , _remote_endpoint(endpoint)
@@ -18,19 +20,25 @@ namespace gb
 	 , _read_buffer_base_block_factor(TRAN_BUF_BLOCK_MAX_FACTOR)
 	 , _write_buffer_base_block_factor(4)
 	 , _timer(ios)
-	 , _socket(ios)
 	 , _connect_timeout(std::chrono::duration<int64_t, std::ratio<1>>(-1))
 	 , _status(NET_STSTUS::STATUS_INIT)
-{
+ {
      RESOURCE_COUNTER_INC(ByteStream);
+
+     if (transport_type == TRANSPORT_TYPE::SSL)
+     {
+         _transport.reset(new SslTransport(this, net_type, ios));
+     }
+     else
+     {
+         _transport.reset(new TcpTransport(this, ios));
+     }
  }
 
  ByteStream::~ByteStream()
 {
-     Error_code ec;
-     _socket.close(ec);
      RESOURCE_COUNTER_DEC(ByteStream);
- }
+}
 
 bool ByteStream::no_delay()
 {
@@ -66,8 +74,7 @@ void ByteStream::close(const std::string& reason)
 {
 	if (atomic_swap(&_status, NET_STSTUS::STATUS_CLOSED) != NET_STSTUS::STATUS_CLOSED)
 	{
-        Error_code ec;
-        _socket.shutdown(Socket::shutdown_both, ec);
+        _transport->close();
         on_closed();
         if (_remote_endpoint != Endpoint())
 		{
@@ -93,7 +100,7 @@ void ByteStream::async_connect()
      _last_rw_ticks = _ticks;
     
      _status = NET_STSTUS::STATUS_CONNECTING;
-     _socket.async_connect(_remote_endpoint, asio_bind(&ByteStream::on_connect,shared_from_this(),_(1)));
+     _transport->async_connect(_remote_endpoint);
 
      if (_connect_timeout.count() > 0)
      {
@@ -105,39 +112,23 @@ void ByteStream::async_connect()
 
 void ByteStream::update_remote_endpoint()
 {
-    Error_code ec;
-    _remote_endpoint = _socket.remote_endpoint(ec);
-    if (ec)
-    {
-        NETWORK_LOG("get remote endpoint failed : {} ",ec.message().c_str());
-        close("update remote endpoint failed: " + ec.message());
-    }
+    _transport->update_remote_endpoint(_remote_endpoint);
 }
 
 void ByteStream::set_socket_connected()
 {
     _last_rw_ticks = _ticks;
-    Error_code ec;
-    _socket.set_option(Asio::ip::tcp::no_delay(_no_delay), ec);
-    if (ec)
-    {
-        NETWORK_LOG("set no_delay option failed: {} ",ec.message().c_str());
-        close("set no_delay option failed: " + ec.message());
-        return;
-    }
+    _timer.cancel();
 
-    _local_endpoint = _socket.local_endpoint(ec);
-    if (ec)
+    if (!_transport->set_connected_options(_local_endpoint, _no_delay))
     {
-        NETWORK_LOG("get local endpoint failed: {} ",ec.message().c_str());
-        close("get local endpoint failed: " + ec.message());
         return;
     }
 
     if (!on_connected())
     {
-        NETWORK_LOG("call on_connected() failed: {} ",ec.message().c_str());
-        close("call on_connected() failed: " + ec.message());
+        NETWORK_LOG("call on_connected() failed");
+        close("call on_connected() failed");
         return;
     }
 
@@ -149,12 +140,12 @@ void ByteStream::set_socket_connected()
 
 Socket& ByteStream::socket()
 {
-    return _socket;
+    return _transport->socket();
 }
 
 SSLSocket* ByteStream::ssl_socket()
 {
-    return nullptr;
+    return _transport->ssl_socket();
 }
 
 IoService& ByteStream::ioservice()
@@ -216,56 +207,22 @@ int64_t ByteStream::connect_timeout()
 
 void ByteStream::async_read_some(char* data, size_t size)
 {
-    _socket.async_read_some(Asio::buffer(data,size),asio_bind(&ByteStream::on_read_some,shared_from_this(),_(1),_(2)));
+    _transport->async_read_some(data, size);
 }
 
 void ByteStream::async_write_some(const char* data, size_t size)
 {
-    _socket.async_write_some(Asio::buffer(data,size),asio_bind(&ByteStream::on_write_some,shared_from_this(),_(1),_(2)));
+    _transport->async_write_some(data, size);
 }
 
-void ByteStream::on_connect(const Error_code& error)
+void ByteStream::set_ssl_server_file_path_impl(std::string& path, std::string& key_path)
 {
-    if (_status != NET_STSTUS::STATUS_CONNECTING)
-    {
-        return;
-    }
-    if (error)
-    {
-        NETWORK_LOG("on_connect(): connect error: {} ",error.message());
-        close("on_connect(): connect error:"  + error.message());
-        return;
-    }
+    _transport->set_ssl_server_file_path(path, key_path);
+}
 
-    Error_code ec;
-    _socket.set_option(Asio::ip::tcp::no_delay(_no_delay), ec);
-    if (ec)
-    {
-        NETWORK_LOG("on_connect(): set no_delay option failed: {} ",error.message());
-        close("on_connect(): set no_delay option failed:"  + error.message());
-        return;
-    }
-
-    _local_endpoint = _socket.local_endpoint(ec);
-    if (ec)
-    {
-        NETWORK_LOG("get local endpoint failed: {} ",error.message());
-        close("get local endpoint failed:"  + error.message());
-        return;
-    }
-    
-    if (!on_connected())
-    {
-        NETWORK_LOG("on_connect(): call on_connected() failed: {} ",error.message());
-        close("on_connect(): call on_connected() failed:"  + error.message());
-        return;
-    }
-
-    _status = NET_STSTUS::STATUS_CONNECTED;
-    _timer.cancel();
-    
-    trigger_receive();
-    trigger_send();
+void ByteStream::set_ssl_client_file_path_impl(std::string& path)
+{
+    _transport->set_ssl_client_file_path(path);
 }
 
 }

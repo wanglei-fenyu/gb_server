@@ -8,7 +8,7 @@ namespace gb
 
 
  MessageStream::MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint) 
-	: MessageStreamBase(net_type,io_service,endpoint)
+	: ByteStream(net_type,io_service,endpoint)
 	, _pending_message_count(0)
 	, _pending_data_size(0)
 	, _pending_buffer_size(0)
@@ -111,16 +111,12 @@ int MessageStream::write_quota_token() const
 
 void MessageStream::set_ssl_server_file_path(std::string& path, std::string& key_path)
 {
-#ifdef USE_SSL_SOCK
     set_ssl_server_file_path_impl(path, key_path);
-#endif
 }
 
 void MessageStream::set_ssl_client_file_path(std::string& path)
 {
-#ifdef USE_SSL_SOCK
-    set_ssl_client_file_path(path);
-#endif
+    set_ssl_client_file_path_impl(path);
 }
 
 //bool MessageStream::on_sending(const ReadBufferPtr& message)
