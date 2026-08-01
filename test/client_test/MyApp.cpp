@@ -137,9 +137,7 @@ int MyApp::OnStartup()
     for (auto worker : workers)
     {
         if (worker)
-        {
-			worker->Post([worker]() {worker->OnStartup();});
-        }
+            worker->OnStartup();
     }
       
     return 0;

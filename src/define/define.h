@@ -48,6 +48,14 @@ enum class CONNECT_TYPE :int8_t
     CT_LOGIN   = 1,
 };
 
+// 传输层类型:ByteStream 构造时按此选择 ITransport 实现
+enum class TRANSPORT_TYPE :int8_t
+{
+    TCP = 0,
+    SSL = 1,
+    KCP = 2,
+};
+
 
 enum NET_ErrorCode {
     NET_SUCCESS = 0,
@@ -116,7 +124,9 @@ enum NET_ErrorCode {
 #endif
 
 DEF_RESOURCE_COUNTER(ByteStream);
-DEF_RESOURCE_COUNTER(SSLByteStream);
+DEF_RESOURCE_COUNTER(TcpTransport);
+DEF_RESOURCE_COUNTER(SslTransport);
+DEF_RESOURCE_COUNTER(KcpTransport);
 DEF_RESOURCE_COUNTER(Listener);
 
 

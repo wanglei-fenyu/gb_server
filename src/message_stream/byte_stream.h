@@ -4,6 +4,7 @@
 #include <memory>
 #include <string>
 #include "define/define.h"
+#include "message_stream/transport/itransport.h"
 
 
 namespace gb
@@ -15,7 +16,7 @@ namespace gb
 class ByteStream : public std::enable_shared_from_this<ByteStream>
 {
 public:
-    ByteStream(NET_TYPE net_type,IoService& ios, const Endpoint& endpoint);
+    ByteStream(NET_TYPE net_type, IoService& ios, const Endpoint& endpoint, TRANSPORT_TYPE transport_type = TRANSPORT_TYPE::TCP);
     virtual ~ByteStream();
 
     bool no_delay();
@@ -53,7 +54,20 @@ public:
     void    set_connect_timeout(int64_t timeout /* 毫秒 */);
     int64_t connect_timeout();
 
-    bool is_ssl_socket() { return false; }
+    bool is_ssl_socket() { return _transport->is_ssl(); }
+
+    void set_ssl_server_file_path_impl(std::string& path, std::string& key_path);
+    void set_ssl_client_file_path_impl(std::string& path);
+
+    bool bind_local(const Endpoint& local_endpoint) { return _transport->bind_local(local_endpoint); }
+
+    bool SetupKcp(const std::shared_ptr<Asio::ip::udp::socket>& shared_socket,
+                  const Asio::ip::udp::endpoint& remote,
+                  uint32_t conv)
+    {
+        return _transport->Setup(shared_socket, remote, conv);
+    }
+    void HandleKcpInput(const char* buf, int len) { _transport->HandleInput(buf, len); }
 
 public:
     virtual bool trigger_receive() = 0;         // 触发接收，成功启动返回true
@@ -69,8 +83,6 @@ public:
     virtual void on_read_some(const Error_code& error,std::size_t bytes_transferred) = 0;
 
     virtual void on_write_some(const Error_code& error,std::size_t bytes_transferred) = 0;
-private:
-    void on_connect(const Error_code& error);
 
 protected:
     NET_TYPE _net_type;
@@ -88,9 +100,9 @@ protected:
 
 private:
     Asio::steady_timer _timer;
-    Socket        _socket;
     std::chrono::steady_clock::duration _connect_timeout;       // 连接超时持续时间
     std::atomic<NET_STSTUS>             _status;
+    std::unique_ptr<ITransport>         _transport;
 };
 
 

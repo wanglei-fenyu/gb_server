@@ -15,7 +15,7 @@ public:
 
 
 public:
-    Session(NET_TYPE net_type, IoService& ios, const Endpoint& endpoint);
+    Session(NET_TYPE net_type, IoService& ios, const Endpoint& endpoint, TRANSPORT_TYPE transport_type = TRANSPORT_TYPE::TCP);
     virtual ~Session();
 
 public:

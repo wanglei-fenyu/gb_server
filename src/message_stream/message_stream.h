@@ -1,21 +1,15 @@
 #pragma once
 
 #include "byte_stream.h"
-#include "ssl_byte_stream.h"
 #include "../buffer/buffer.h"
 #include "../buffer/tran_buf_pool.h"
 #include "flow_controller.h"
 #include "message_header.h"
 
-#ifdef USER_SSL_SOCKET
-#define MessageStreamBase SSLByteStream
-#else
-#define MessageStreamBase ByteStream
-#endif
 namespace gb
 {
 
-class MessageStream : public MessageStreamBase
+class MessageStream : public ByteStream
 {
    
 private:
@@ -36,7 +30,7 @@ private:
     };
 
 public:
-    MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint);
+    MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint, TRANSPORT_TYPE transport_type = TRANSPORT_TYPE::TCP);
     virtual ~MessageStream();
 
     void async_send_message(const ReadBufferPtr& message);

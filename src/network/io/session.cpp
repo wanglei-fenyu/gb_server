@@ -6,8 +6,8 @@
 namespace gb
 {
 
- Session::Session(NET_TYPE net_type, IoService& ios, const Endpoint& endpoint) 
-     : MessageStream(net_type, ios, endpoint)
+ Session::Session(NET_TYPE net_type, IoService& ios, const Endpoint& endpoint, TRANSPORT_TYPE transport_type)
+     : MessageStream(net_type, ios, endpoint, transport_type)
      , _start_heartbeat(false), _heartbeat_timer(ios)
  {
 }

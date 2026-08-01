@@ -124,6 +124,7 @@ void ClientImpl::ResetOptions(const ClientOptions& options)
     _options.max_throughput_out = options.max_throughput_out;
     _options.max_pending_buffer_size = options.max_pending_buffer_size;
     _options.keep_alive_time = options.keep_alive_time;
+    _options.transport_type = options.transport_type;
 
     _slice_quota_in = _options.max_throughput_in == -1 ? -1 : std::max(0L, _options.max_throughput_in * 1024L * 1024L) / _slice_count;
     _slice_quota_out = _options.max_throughput_out == -1 ? -1 : std::max(0L, _options.max_throughput_out * 1024L * 1024L) / _slice_count;
@@ -174,7 +175,7 @@ gb::SessionPtr ClientImpl::FindOrCreateStream(const Endpoint& remote_endpoint)
         else
         {
 			auto [io_service_index, ios] = _io_service_pool->GetIoService();
-            session.reset(new Session(NET_TYPE::NT_CLIENT,ios, remote_endpoint));
+            session.reset(new Session(NET_TYPE::NT_CLIENT, ios, remote_endpoint, _options.transport_type));
             //session->SetIoServicePoolIndex(io_service_index);
             session->set_flow_controller(_flow_controller);
             session->set_max_pending_buffer_size(_max_pending_buffer_size);
