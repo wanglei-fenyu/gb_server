@@ -29,6 +29,7 @@ class GBServer(ConanFile):
         self.requires("libpq/17.7")
         self.requires("catch2/3.15.0")
         self.requires("cnats/3.12.0")
+        self.requires("kcp/2.1.1")
         #self.requires("abseil/20230125.0",override=True)
         #self.requires("grpc/1.54.3", override=True)
         #self.requires("etcd-cpp-apiv3/0.15.4")
