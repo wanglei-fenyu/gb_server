@@ -3,17 +3,19 @@
 
 namespace gb
 {
-Listener::Listener(IoService& io, IoServicePoolPtr& io_service_pool, const Endpoint& endpoint)
+Listener::Listener(IoService& io, IoServicePoolPtr& io_service_pool, const Endpoint& endpoint, TRANSPORT_TYPE transport_type)
 	 : _io_service_pool(io_service_pool), _ios(io)
 	 , _endpoint(endpoint)
+	 , _transport_type(transport_type)
 	// , _ios(io_service_pool->GetIoService().second)
 	 , _acceptor(_ios)
 	 , _is_closed(false)
 {
 }
-Listener::Listener(IoServicePoolPtr& io_service_pool, const Endpoint& endpoint) 
+Listener::Listener(IoServicePoolPtr& io_service_pool, const Endpoint& endpoint, TRANSPORT_TYPE transport_type) 
 	 : _io_service_pool(io_service_pool)
 	 , _endpoint(endpoint)
+	 , _transport_type(transport_type)
 	 , _ios(io_service_pool->GetIoService().second)
 	 , _acceptor(_ios)
 	 , _is_closed(false)
@@ -112,7 +114,7 @@ bool Listener::start_listen()
 void Listener::async_accept()
 {
     auto [io_service_index, ios] = _io_service_pool->GetIoService();
-    SessionPtr session = std::make_shared<Session>(NET_TYPE::NT_SERVER, ios, Endpoint());
+    SessionPtr session = std::make_shared<Session>(NET_TYPE::NT_SERVER, ios, Endpoint(), _transport_type);
     //session->SetIoServicePoolIndex(io_service_index);
     if (_create_callback)
         _create_callback(session);

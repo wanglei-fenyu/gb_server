@@ -7,8 +7,8 @@ namespace gb
 
 
 
- MessageStream::MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint) 
-	: ByteStream(net_type,io_service,endpoint)
+ MessageStream::MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint, TRANSPORT_TYPE transport_type)
+ 	: ByteStream(net_type,io_service,endpoint, transport_type)
 	, _pending_message_count(0)
 	, _pending_data_size(0)
 	, _pending_buffer_size(0)

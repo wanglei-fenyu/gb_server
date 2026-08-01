@@ -30,7 +30,7 @@ private:
     };
 
 public:
-    MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint);
+    MessageStream(NET_TYPE net_type, IoService& io_service, const Endpoint& endpoint, TRANSPORT_TYPE transport_type = TRANSPORT_TYPE::TCP);
     virtual ~MessageStream();
 
     void async_send_message(const ReadBufferPtr& message);

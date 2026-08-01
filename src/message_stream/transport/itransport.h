@@ -49,6 +49,30 @@ public:
     // 刷新对端地址(供日志/回调使用)
     virtual void update_remote_endpoint(Endpoint& remote_endpoint) = 0;
 
+    // 绑定本地地址(仅 KcpTransport 需要;TCP 走 connect 内核绑定,默认空实现)
+    virtual bool bind_local(const Endpoint& local_endpoint)
+    {
+        (void)local_endpoint;
+        return true;
+    }
+
+    // 服务端共享 socket 接管(仅 KcpTransport 需要):绑定共享 udp socket + 对端 + conv,
+    // 由 KcpListener 转发 HandleInput。TCP/SSL 默认不可用。
+    virtual bool Setup(const std::shared_ptr<Asio::ip::udp::socket>& shared_socket,
+                       const Asio::ip::udp::endpoint& remote,
+                       uint32_t conv)
+    {
+        (void)shared_socket;
+        (void)remote;
+        (void)conv;
+        return false;
+    }
+    virtual void HandleInput(const char* buf, int len)
+    {
+        (void)buf;
+        (void)len;
+    }
+
     // SSL 证书路径配置(默认空实现,仅 SslTransport 覆写)
     virtual void set_ssl_server_file_path(std::string& path, std::string& key_path) {}
     virtual void set_ssl_client_file_path(std::string& path) {}

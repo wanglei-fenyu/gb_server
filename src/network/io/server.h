@@ -1,5 +1,6 @@
 ﻿#pragma once 
 #include "listener.h"
+#include "kcp_listener.h"
 #include "define/define.h"
 #include "network/io/timer_worker.h"
 #include "handle_interface.h"
@@ -25,6 +26,8 @@ struct ServerOptions
     
     bool no_delay;  //默认true  
 
+    TRANSPORT_TYPE transport_type;  // 传输层类型:TCP / SSL / KCP
+
 	ServerOptions()
 	//: work_thread_num(8)
 	: max_connection_count(-1)
@@ -36,6 +39,7 @@ struct ServerOptions
 	, write_buffer_base_block_factor(4)
 	, read_buffer_base_block_factor(9)
 	, no_delay(true)
+	, transport_type(TRANSPORT_TYPE::TCP)
     {}
 };
 
@@ -95,6 +99,7 @@ private:
     IoServicePoolPtr _io_service_pool;
     Endpoint      _listen_endpoint;
     ListenerPtr   _listener;
+    KcpListenerPtr _kcp_listener;
     ServerOptions _options;
 
     bool _is_runing;

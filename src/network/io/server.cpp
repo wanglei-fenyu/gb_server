@@ -57,22 +57,41 @@ bool ServerImpl::Start(std::string_view server_address)
         return false;
     }
 
-    _listener.reset(new Listener(_maintain_thread->GetIoContext(),_io_service_pool,_listen_endpoint));
-    _listener->set_create_callback(asio_bind(&ServerImpl::OnCreated,shared_from_this(),_(1)));
-    _listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted,shared_from_this(),_(1)));
-    _listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed,shared_from_this(),_(1),_(2)));
-    if (!_listener->start_listen())
+    if (_options.transport_type == TRANSPORT_TYPE::KCP)
     {
-        NETWORK_LOG("Start(): listen failed: {}", server_address);
-        _listener.reset();
-        _maintain_thread.reset();
-        _io_service_pool.reset();
-        _flow_controller.reset();
-        return false;
+        _kcp_listener.reset(new KcpListener(_maintain_thread->GetIoContext(), _io_service_pool, _listen_endpoint));
+        _kcp_listener->set_create_callback(asio_bind(&ServerImpl::OnCreated, shared_from_this(), _(1)));
+        _kcp_listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted, shared_from_this(), _(1)));
+        _kcp_listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed, shared_from_this(), _(1), _(2)));
+        if (!_kcp_listener->start_listen())
+        {
+            NETWORK_LOG("Start(): kcp listen failed: {}", server_address);
+            _kcp_listener.reset();
+            _maintain_thread.reset();
+            _io_service_pool.reset();
+            _flow_controller.reset();
+            return false;
+        }
+        NETWORK_LOG("Start(): kcp listen succeed: {}", server_address);
     }
+    else
+    {
+        _listener.reset(new Listener(_maintain_thread->GetIoContext(), _io_service_pool, _listen_endpoint, _options.transport_type));
+        _listener->set_create_callback(asio_bind(&ServerImpl::OnCreated, shared_from_this(), _(1)));
+        _listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted, shared_from_this(), _(1)));
+        _listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed, shared_from_this(), _(1), _(2)));
+        if (!_listener->start_listen())
+        {
+            NETWORK_LOG("Start(): listen failed: {}", server_address);
+            _listener.reset();
+            _maintain_thread.reset();
+            _io_service_pool.reset();
+            _flow_controller.reset();
+            return false;
+        }
 
-    NETWORK_LOG("Start(): listen succeed:: {}", server_address);
-
+        NETWORK_LOG("Start(): listen succeed:: {}", server_address);
+    }
     _timer_worker.reset(new TimerWorker(_maintain_thread->GetIoContext()));
     _timer_worker->set_time_duration(std::chrono::milliseconds(MAINTAIN_INTERVAL_IN_MS));
     _timer_worker->set_work_routine(asio_bind(&ServerImpl::TimerMaintain, shared_from_this(), _(1)));
@@ -93,6 +112,8 @@ void ServerImpl::Stop()
         _timer_worker->stop();
     if (_listener)
         _listener->close();
+    if (_kcp_listener)
+        _kcp_listener->close();
     StopSession();
     if (_io_service_pool)
         _io_service_pool->GracefulStop();
@@ -101,6 +122,7 @@ void ServerImpl::Stop()
 
     _timer_worker.reset();
     _listener.reset();
+    _kcp_listener.reset();
     ClearSession();
     _io_service_pool.reset();
     _maintain_thread.reset();
@@ -195,7 +217,9 @@ void ServerImpl::GetPendingStat(int64_t* pending_message_count, int64_t* pending
 bool ServerImpl::IsListening()
 {
     std::lock_guard<std::mutex> _lock(_start_stop_mutex);
-    return _is_runing && !_listener->is_close();
+    if (!_is_runing)
+        return false;
+    return _options.transport_type == TRANSPORT_TYPE::KCP ? !_kcp_listener->is_close() : !_listener->is_close();
 }
 
 bool ServerImpl::ReStartListen()
@@ -203,9 +227,26 @@ bool ServerImpl::ReStartListen()
     std::lock_guard<std::mutex> _lock(_start_stop_mutex);
     if (!_is_runing)
         return false;
-    
+
+    if (_options.transport_type == TRANSPORT_TYPE::KCP)
+    {
+        if (_kcp_listener)
+            _kcp_listener->close();
+        _kcp_listener.reset(new KcpListener(_io_service_pool, _listen_endpoint));
+        _kcp_listener->set_create_callback(asio_bind(&ServerImpl::OnCreated, shared_from_this(), _(1)));
+        _kcp_listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted, shared_from_this(), _(1)));
+        _kcp_listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed, shared_from_this(), _(1), _(2)));
+        if (!_kcp_listener->start_listen())
+        {
+            NETWORK_LOG("Start(): kcp listen failed");
+            return false;
+        }
+        NETWORK_LOG("Start(): kcp listen succeed");
+        return true;
+    }
+
     _listener->close();
-    _listener.reset(new Listener(_io_service_pool,_listen_endpoint));
+    _listener.reset(new Listener(_io_service_pool,_listen_endpoint, _options.transport_type));
     _listener->set_create_callback(asio_bind(&ServerImpl::OnCreated,shared_from_this(),_(1)));
     _listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted,shared_from_this(),_(1)));
     _listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed,shared_from_this(),_(1),_(2)));
@@ -323,7 +364,8 @@ void ServerImpl::ClearSession()
 void ServerImpl::TimerMaintain(const time_point_t& now)
 {
     int64_t now_ticks =  std::chrono::duration_cast<std::chrono::seconds>(now - _start_time).count();
-    if (_listener->is_close() && now_ticks - _last_restart_listen_ticks >= _restart_listen_interval_ticks)
+    bool listener_closed = _options.transport_type == TRANSPORT_TYPE::KCP ? _kcp_listener->is_close() : _listener->is_close();
+    if (listener_closed && now_ticks - _last_restart_listen_ticks >= _restart_listen_interval_ticks)
     {
         _last_restart_listen_ticks = now_ticks;
         ReStartListen();

@@ -2,6 +2,7 @@
 
 #include "network/io/session.h"
 #include "network/io/io_service_pool.h"
+#include "define/define.h"
 namespace gb
 {
 
@@ -14,8 +15,8 @@ public:
 	static const int LISTEN_MAX_CONNECTIONS = 4096;
 
 public:
-    Listener(IoService& io, IoServicePoolPtr& io_service_pool, const Endpoint& endpoint);
-    Listener(IoServicePoolPtr& io_service_pool, const Endpoint& endpoint);
+    Listener(IoService& io, IoServicePoolPtr& io_service_pool, const Endpoint& endpoint, TRANSPORT_TYPE transport_type = TRANSPORT_TYPE::TCP);
+    Listener(IoServicePoolPtr& io_service_pool, const Endpoint& endpoint, TRANSPORT_TYPE transport_type = TRANSPORT_TYPE::TCP);
     virtual ~Listener();
 
     void close();
@@ -34,6 +35,7 @@ private:
     IoServicePoolPtr& _io_service_pool;
     Endpoint   _endpoint;
     Acceptor   _acceptor;
+    TRANSPORT_TYPE _transport_type;
 
     callback_t _create_callback;
     callback_t _accept_callback;

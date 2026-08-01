@@ -59,6 +59,16 @@ public:
     void set_ssl_server_file_path_impl(std::string& path, std::string& key_path);
     void set_ssl_client_file_path_impl(std::string& path);
 
+    bool bind_local(const Endpoint& local_endpoint) { return _transport->bind_local(local_endpoint); }
+
+    bool SetupKcp(const std::shared_ptr<Asio::ip::udp::socket>& shared_socket,
+                  const Asio::ip::udp::endpoint& remote,
+                  uint32_t conv)
+    {
+        return _transport->Setup(shared_socket, remote, conv);
+    }
+    void HandleKcpInput(const char* buf, int len) { _transport->HandleInput(buf, len); }
+
 public:
     virtual bool trigger_receive() = 0;         // 触发接收，成功启动返回true
     virtual bool trigger_send() = 0;            // 触发发送，成功启动返回true

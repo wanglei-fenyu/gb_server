@@ -53,7 +53,7 @@ enum class TRANSPORT_TYPE :int8_t
 {
     TCP = 0,
     SSL = 1,
-    // KCP = 2,   // 阶段 2 加入
+    KCP = 2,
 };
 
 
@@ -126,6 +126,7 @@ enum NET_ErrorCode {
 DEF_RESOURCE_COUNTER(ByteStream);
 DEF_RESOURCE_COUNTER(TcpTransport);
 DEF_RESOURCE_COUNTER(SslTransport);
+DEF_RESOURCE_COUNTER(KcpTransport);
 DEF_RESOURCE_COUNTER(Listener);
 
 

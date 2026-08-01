@@ -3,6 +3,7 @@
 #include "buffer/tran_buf_pool.h"
 #include "base/atomic.h"
 #include "base/endpoint_help.h"
+#include "message_stream/transport/kcp_transport.h"
 #include "message_stream/transport/tcp_transport.h"
 #include "message_stream/transport/ssl_transport.h"
 namespace gb
@@ -28,6 +29,10 @@ namespace gb
      if (transport_type == TRANSPORT_TYPE::SSL)
      {
          _transport.reset(new SslTransport(this, net_type, ios));
+     }
+     else if (transport_type == TRANSPORT_TYPE::KCP)
+     {
+         _transport.reset(new KcpTransport(this, ios, GenerateKcpConv()));
      }
      else
      {
