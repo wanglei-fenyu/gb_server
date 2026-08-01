@@ -77,6 +77,8 @@ int MyApp::OnInit()
     gb::NetworkManager::Instance()->GetRouter().RegisterWorker(gb::SWT_Normal, narmal_worker);
 
     gb::ClientOptions options;
+    options.transport_type  = gb::TRANSPORT_TYPE::SSL;
+    options.ssl_ca_file = ResPath::Instance()->FindResPath("ssl/ca.crt");
     options.keep_alive_time = -1;
     client_.reset(new gb::Client(options));
     gb::NetworkManager::Instance()->Init(client_.get());

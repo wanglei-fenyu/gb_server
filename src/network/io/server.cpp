@@ -60,6 +60,7 @@ bool ServerImpl::Start(std::string_view server_address)
     if (_options.transport_type == TRANSPORT_TYPE::KCP)
     {
         _kcp_listener.reset(new KcpListener(_maintain_thread->GetIoContext(), _io_service_pool, _listen_endpoint));
+        _kcp_listener->set_flow_controller(_flow_controller);
         _kcp_listener->set_create_callback(asio_bind(&ServerImpl::OnCreated, shared_from_this(), _(1)));
         _kcp_listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted, shared_from_this(), _(1)));
         _kcp_listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed, shared_from_this(), _(1), _(2)));
@@ -233,6 +234,7 @@ bool ServerImpl::ReStartListen()
         if (_kcp_listener)
             _kcp_listener->close();
         _kcp_listener.reset(new KcpListener(_io_service_pool, _listen_endpoint));
+        _kcp_listener->set_flow_controller(_flow_controller);
         _kcp_listener->set_create_callback(asio_bind(&ServerImpl::OnCreated, shared_from_this(), _(1)));
         _kcp_listener->set_accept_callback(asio_bind(&ServerImpl::OnAccepted, shared_from_this(), _(1)));
         _kcp_listener->set_accept_fail_callback(asio_bind(&ServerImpl::OnAcceptedFailed, shared_from_this(), _(1), _(2)));

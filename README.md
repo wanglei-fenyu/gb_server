@@ -309,11 +309,75 @@ w->Post([]() {
 | `worker->Post(f)` | 任意线程 | 投递到目标 Worker 队列，帧循环内执行 |
 | `WorkerManager::PostToMain(f)` | 任意线程 | 投递到主线程 Worker |
 | `WorkerManager::BroadcastToWorkers(f)` | 任意线程 | 广播到所有 Normal Worker |
-| `IoWorker → Router → Worker::Post` | IoWorker | 网络消息分发（见模块四） |
+| `IoWorker → Router → Worker::Post` | IoWorker | 网络消息分发（见模块五） |
 
 ---
 
-# 模块三：消息系统
+# 模块三：传输层（TCP / SSL / KCP）
+
+`Server` / `Client` 通过 `transport_type` 选择传输层，`ByteStream` 构造时按类型创建对应的 `ITransport` 实现（`src/message_stream/byte_stream.cpp`）：
+
+```cpp
+// src/define/define.h
+enum class TRANSPORT_TYPE : int8_t
+{
+    TCP = 0,   // 明文 TCP
+    SSL = 1,   // TLS over TCP
+    KCP = 2,   // 可靠 UDP
+};
+```
+
+| 传输层 | 底层协议 | 加密 | 典型场景 |
+|---|---|---|---|
+| `TCP` | TCP | 无 | 内网通信、默认传输 |
+| `SSL` | TCP + TLSv1.2 | 是（服务端证书） | 公网传输、账号/充值等敏感数据 |
+| `KCP` | UDP（可靠重传） | 无 | 弱网、实时对战、延迟敏感链路 |
+
+## TCP（明文 TCP）
+
+默认传输层（`TRANSPORT_TYPE::TCP`），走标准 `async_accept` / `async_connect`，无加密开销。适合内网或明文不敏感的数据。
+
+## SSL（TLS over TCP）
+
+- TLSv1.2（禁用 SSLv2/3），握手由框架自动完成：
+  - 服务端：`Listener::on_accept` → `async_handshake(stream_base::server)` → `set_socket_connected`；
+  - 客户端：`SslTransport::async_connect` → connect → handshake(client) → `set_socket_connected`。
+- 证书配置：
+  - 服务端 `ServerOptions.ssl_cert_file` + `ssl_key_file`（证书链 + 私钥，`use_certificate_chain_file` + `use_private_key_file`）；
+  - 客户端 `ClientOptions.ssl_ca_file`（CA 证书，`load_verify_file` + `verify_peer` 校验服务端证书链）。
+- ⚠️ 服务端证书必须由客户端信任的 CA 签发且**在有效期内**——证书过期/链不匹配时握手失败（`NET_LOG_ERROR` 记录 `handshake error`，见模块十）。自签名测试证书见 `res/ssl/`（ca/server/client × .crt/.key，有效期 10 年）。
+
+## KCP（可靠 UDP）
+
+基于 ikcp 的可靠 UDP 传输，在 UDP 之上实现重传、乱序重组与流量窗口（`src/message_stream/transport/kcp_transport.h`）：
+
+- **无连接语义**：客户端连接时生成唯一 `conv`（`GenerateKcpConv`，碰撞概率 ~1/2³²），服务端按 conv 区分连接。
+- **服务端模型**：`KcpListener` 只 bind 一个 UDP socket（`reuse_address`），收包后按 `ikcp_getconv` 路由到对应会话的 io_context（每连接独立 io_service，多连接复用同一端口）；首包到达时创建 Session。
+- **关键参数**：mss 1376B、收发窗口 128/128（≈176KB，读回压上限）、update 间隔 10ms、`ikcp_nodelay` 快速模式、接收缓冲 64KB。
+- **数据通路**：发送 `async_write_some` → `_out_buffer` → 按 mss 分段 `ikcp_send`（发送窗口满则 hold，10ms 定时器推进）；接收常驻 `async_receive_from` → `ikcp_input` → `ikcp_recv` → `_in_buffer` → `async_read_some` 交付。
+- **不加密**：KCP 不承载 TLS，公网边界需外层加密或消息级 AEAD。
+- **流控**：写限流直接生效（配额不足排队，充值后继续）；读限流间接生效——流控停取数据后，由 KCP 接收窗口回压对端。
+
+## 配置示例
+
+```cpp
+// 服务端：SSL（TCP/SSL/KCP 三选一）
+gb::ServerOptions options;
+options.transport_type = gb::TRANSPORT_TYPE::SSL;
+options.ssl_cert_file  = ResPath::Instance()->FindResPath("ssl/server.crt");
+options.ssl_key_file   = ResPath::Instance()->FindResPath("ssl/server.key");
+gb::Server server(options);
+
+// 客户端：SSL
+gb::ClientOptions options;
+options.transport_type = gb::TRANSPORT_TYPE::SSL;
+options.ssl_ca_file    = ResPath::Instance()->FindResPath("ssl/ca.crt");
+gb::Client client(options);
+```
+
+---
+
+# 模块四：消息系统
 
 ## 消息头（MessageHeader）
 
@@ -507,7 +571,7 @@ IoWorker 收到完整消息
 
 ---
 
-# 模块四：路由机制
+# 模块五：路由机制
 
 ## 路由总览
 
@@ -594,7 +658,7 @@ enum class ServiceWorkerType {
 
 ---
 
-# 模块五：RPC 系统
+# 模块六：RPC 系统
 
 RPC 基于 **Meta(MsgMode::Request/Response) + MD5 方法路由 + msgpack 序列化**，支持回调与协程两种调用方式。
 
@@ -692,7 +756,7 @@ union SequenceId {
 
 ---
 
-# 模块六：Lua 脚本系统
+# 模块七：Lua 脚本系统
 
 每个 Worker 拥有**独立的 Lua 状态**（sol3），绑定互不干扰。
 
@@ -773,7 +837,7 @@ Worker::OnStart()
 
 ---
 
-# 模块七：HTTP 模块
+# 模块八：HTTP 模块
 
 基于 **Boost.Beast** 的 HTTP/HTTPS 服务器与客户端，独立于 TCP 消息系统。
 
@@ -842,7 +906,7 @@ client->Post("http://example.com/api", body, cb, "application/json");
 
 ---
 
-# 模块八：定时器系统
+# 模块九：定时器系统
 
 ## 双优先队列
 
@@ -884,7 +948,7 @@ timer.UnRegister(id)                                     -- 反注册
 
 ---
 
-# 模块九：错误处理与日志
+# 模块十：错误处理与日志
 
 ## 日志（src/log/log.h）
 
@@ -914,7 +978,7 @@ Lua 侧 `log.Info/Error/Warning` 自动携带 `文件:行号`（通过 `debug.ge
 
 ---
 
-# 模块十：Redis Lua 接口（src/db/redis/）
+# 模块十一：Redis Lua 接口（src/db/redis/）
 
 **连接池 + Boost.Redis**，Lua 侧支持**回调**与 **Await 协程**两种用法。
 
@@ -945,7 +1009,7 @@ local err, value = redis.Await("Get", "key")
 
 ---
 
-# 模块十一：PostgreSQL Lua 接口（src/db/postgres/）
+# 模块十二：PostgreSQL Lua 接口（src/db/postgres/）
 
 **libpq**，异步连接与查询，支持事务与 Await 协程。
 
@@ -971,7 +1035,7 @@ local err, rows = pg.Await("Query", "SELECT * FROM player WHERE id = $1", 1001)
 
 ---
 
-# 模块十二：NATS 消息系统（src/network/nats/）
+# 模块十三：NATS 消息系统（src/network/nats/）
 
 基于 **cnats（NATS C 客户端）** 的异步消息系统，支持**普通消息 + 请求/响应**，与 `Meta` 无缝对接。
 
@@ -1024,7 +1088,7 @@ local err, resp = nats.Await("RequestProto", subject, meta_bytes, request_proto,
 
 ---
 
-# 模块十三：ETCD 服务发现（src/network/etcd/）
+# 模块十四：ETCD 服务发现（src/network/etcd/）
 
 基于 **etcd v3 HTTP JSON API**（使用框架自研 HttpClient，底层 Boost.Asio）的 KV + 租约 + Watch，用于服务注册与发现。
 

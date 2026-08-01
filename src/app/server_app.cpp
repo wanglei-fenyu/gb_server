@@ -64,10 +64,10 @@ int ServerApp::OnInit()
     server_ = std::make_unique<gb::Server>(opts);
 
     server_->SetConnnectCallBack([](const gb::SessionPtr& session) {
-        LOG_INFO("Accept:{}", session->socket().local_endpoint().address().to_string());
+        LOG_INFO("Accept:{}", session->remote_endpoint().address().to_string());
     });
     server_->SetCloseCallBack([](const gb::SessionPtr& session) {
-        LOG_INFO("Close:{}", session->socket().local_endpoint().address().to_string());
+        LOG_INFO("Close:{}", session->remote_endpoint().address().to_string());
     });
 
     gb::NetworkManager::Instance()->Init(server_.get());

@@ -131,7 +131,7 @@ DEF_RESOURCE_COUNTER(Listener);
 
 
 //是否使用网络日志
-#define USE_NETWORK_LOG_TRACK false
+#define USE_NETWORK_LOG_TRACK true
 
 #if USE_NETWORK_LOG_TRACK   
     #define NETWORK_LOG(...)     NET_LOG_INFO(__VA_ARGS__);

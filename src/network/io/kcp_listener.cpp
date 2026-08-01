@@ -66,6 +66,11 @@ void KcpListener::set_accept_fail_callback(const fail_callback_t& accept_fail_ca
     _accept_fail_callback = accept_fail_callback;
 }
 
+void KcpListener::set_flow_controller(const FlowControllerPtr& flow_controller)
+{
+    _flow_controller = flow_controller;
+}
+
 bool KcpListener::start_listen()
 {
     Error_code ec;
@@ -146,16 +151,21 @@ void KcpListener::OnReceive(const Error_code& ec,
             auto data = buf;
             auto n = bytes_transferred;
             Asio::post(ios, [self, session, sender, conv, data, n]() {
-                if (self->_create_callback)
-                    self->_create_callback(session);
-                if (self->_accept_callback)
-                    self->_accept_callback(session);
+                // 提前应用流控:与 TCP/SSL 一致,确保首个 trigger_receive 时已有限流配置
+                if (self->_flow_controller)
+                    session->set_flow_controller(self->_flow_controller);
                 auto shared_socket = self->_socket;
                 if (!session->SetupKcp(shared_socket, sender, conv))
                 {
                     session->close("kcp setup failed");
                     return;
                 }
+                // 先完成传输层初始化并填充对端地址，回调里才能读取 remote_endpoint()
+                session->update_remote_endpoint();
+                if (self->_create_callback)
+                    self->_create_callback(session);
+                if (self->_accept_callback)
+                    self->_accept_callback(session);
                 session->HandleKcpInput(data->data(), static_cast<int>(n));
             });
         }

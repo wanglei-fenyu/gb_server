@@ -15,6 +15,9 @@ namespace gb
 	, _swapped_message_count(0)
 	, _swapped_data_size(0)
 	, _swapped_buffer_size(0)
+	// 默认不限流:TCP/SSL 会话由 Server/Client 通过 set_flow_controller 覆盖,
+	// KcpListener 创建的 KCP 会话未显式设置,直接使用默认(否则 try_start_receive 空指针崩溃)
+	, _flow_controller(std::make_shared<FlowController>(true, -1, true, -1))
 	, _max_pending_buffer_size(0)
 	, _read_quota_token(1)
 	, _write_quota_token(1)

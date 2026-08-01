@@ -33,6 +33,8 @@ public:
     void set_create_callback(const callback_t& create_callback);
     void set_accept_callback(const callback_t& accept_callback);
     void set_accept_fail_callback(const fail_callback_t& accept_fail_callback);
+    // 设置新建会话的流量控制器(在 SetupKcp 之前应用,与 TCP/SSL 行为一致)
+    void set_flow_controller(const FlowControllerPtr& flow_controller);
     bool start_listen();
 
 private:
@@ -52,6 +54,8 @@ private:
     callback_t _create_callback;
     callback_t _accept_callback;
     fail_callback_t _accept_fail_callback;
+
+    FlowControllerPtr _flow_controller;
 
     std::atomic<bool> _is_closed;
     std::mutex _close_mutex;

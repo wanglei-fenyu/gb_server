@@ -45,14 +45,17 @@ int MyApp::OnInit()
 	std::string uir = ip + ":" + port;
 	gb::ServerOptions options;
     options.keep_alive_time = -1;
-    options.io_service_pool_size = 1;
+    options.transport_type  = gb::TRANSPORT_TYPE::SSL;
+    options.ssl_cert_file = ResPath::Instance()->FindResPath("ssl/server.crt");
+    options.ssl_key_file = ResPath::Instance()->FindResPath("ssl/server.key");
+    options.io_service_pool_size = 3;
     server_ = std::make_unique<gb::Server>(options);
 
     server_->SetConnnectCallBack([](const gb::SessionPtr& session) {
-        LOG_INFO("Accept:{}", session->socket().local_endpoint().address().to_string());
+        LOG_INFO("Accept:{}", session->remote_endpoint().address().to_string());
     });
     server_->SetCloseCallBack([](const gb::SessionPtr& session) {
-        LOG_INFO("Close:{}", session->socket().local_endpoint().address().to_string());
+        LOG_INFO("Close:{}", session->remote_endpoint().address().to_string());
     });
     gb::NetworkManager::Instance()->Init(server_.get());
     Test_Register();

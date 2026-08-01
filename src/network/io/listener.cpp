@@ -163,7 +163,7 @@ void Listener::on_accept(const SessionPtr& session, const Error_code& ec)
                     }
                     else
                     {
-                        NETWORK_LOG("handshake: {} : {} error:{}", EndpointToString(_endpoint), EndpointToString(session->remote_endpoint()), error.message());
+                        NET_LOG_ERROR("handshake: {} : {} error:{}", EndpointToString(_endpoint), EndpointToString(session->remote_endpoint()), error.message());
                     }
                 });
             }

@@ -52,8 +52,8 @@ void SslTransport::on_handshake(const Error_code& error)
     }
     else
     {
-        NETWORK_LOG("handshake error: {}", error.message());
-        _host->close("handshake faileda:" + error.message());
+        NET_LOG_ERROR("handshake error: {}", error.message());
+        _host->close("handshake failed:" + error.message());
     }
 }
 
