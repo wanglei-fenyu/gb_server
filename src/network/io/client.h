@@ -18,7 +18,11 @@ struct ClientOptions
     
     int connect_timeout;  //连接超时时间，-1表示没有限制
     
-    bool no_delay;  //默认true  
+    bool no_delay;  //默认true
+
+    TRANSPORT_TYPE transport_type;  // 传输层类型: TCP / SSL / KCP
+
+    std::string ssl_ca_file;  // SSL CA证书文件路径（仅SSL传输时需要）
 
 	ClientOptions()
 	: work_thread_num(4)
@@ -29,6 +33,7 @@ struct ClientOptions
 	, max_throughput_out(-1)
     , connect_timeout(-1)
 	, no_delay(true)
+    , transport_type(TRANSPORT_TYPE::TCP)
     {}
 };
 

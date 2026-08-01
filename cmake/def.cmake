@@ -39,6 +39,7 @@ macro(conan_link_libraries target_name)
         pugixml::pugixml
         sol2::sol2
         cxxopts::cxxopts
+        kcp::kcp
         PostgreSQL::PostgreSQL
         cnats::nats_static
     )

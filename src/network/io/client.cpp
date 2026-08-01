@@ -124,6 +124,7 @@ void ClientImpl::ResetOptions(const ClientOptions& options)
     _options.max_throughput_out = options.max_throughput_out;
     _options.max_pending_buffer_size = options.max_pending_buffer_size;
     _options.keep_alive_time = options.keep_alive_time;
+    _options.transport_type = options.transport_type;
 
     _slice_quota_in = _options.max_throughput_in == -1 ? -1 : std::max(0L, _options.max_throughput_in * 1024L * 1024L) / _slice_count;
     _slice_quota_out = _options.max_throughput_out == -1 ? -1 : std::max(0L, _options.max_throughput_out * 1024L * 1024L) / _slice_count;
@@ -174,7 +175,7 @@ gb::SessionPtr ClientImpl::FindOrCreateStream(const Endpoint& remote_endpoint)
         else
         {
 			auto [io_service_index, ios] = _io_service_pool->GetIoService();
-            session.reset(new Session(NET_TYPE::NT_CLIENT,ios, remote_endpoint));
+            session.reset(new Session(NET_TYPE::NT_CLIENT, ios, remote_endpoint, _options.transport_type));
             //session->SetIoServicePoolIndex(io_service_index);
             session->set_flow_controller(_flow_controller);
             session->set_max_pending_buffer_size(_max_pending_buffer_size);
@@ -184,6 +185,11 @@ gb::SessionPtr ClientImpl::FindOrCreateStream(const Endpoint& remote_endpoint)
             session->set_connected_callback(asio_bind(&ClientImpl::OnConnected, shared_from_this(), _(1)));
             session->set_received_callback(asio_bind(&ClientImpl::OnReceived, shared_from_this(), _(1),_(2),_(3),_(4)));
             session->set_no_delay(_options.no_delay);
+
+            if (_options.transport_type == TRANSPORT_TYPE::SSL)
+            {
+                session->set_ssl_client_file_path(_options.ssl_ca_file);
+            }
             
             _session_map[remote_endpoint] = session;
             create                        = true;
@@ -230,34 +236,8 @@ void ClientImpl::OnClosed(const SessionPtr& session)
 
 void ClientImpl::OnConnected(const SessionPtr& session)
 {
-  //  if (session->is_ssl_socket())
-  //  {
-  //      auto ssl_sock = session->ssl_socket();
-  //      if (ssl_sock)
-  //      {
-  //          ssl_sock->async_handshake(Asio::ssl::stream_base::client, [this,session](const Error_code& error) {
-  //              if (!error && _connected_callback)
-  //              {
-  //                  _connected_callback(session);
-  //              }
-  //              else
-  //                  NETWORK_LOG("handshake error:{}", error.message());
-
-  //          });
-  //      }
-  //      else
-  //      {
-  //          
-		//	NETWORK_LOG("ssl::sock  not find ssl::socket point");
-  //      }
-  //  }
-  //  else
-  //  {
-		//if (_connected_callback)
-		//	_connected_callback(session);
-  //  }
-	if (_connected_callback)
-		_connected_callback(session);
+    if (_connected_callback)
+        _connected_callback(session);
 }
 
 
