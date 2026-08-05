@@ -1,47 +1,48 @@
 #pragma once
 #include "redis_config.h"
+#include "redis_value.h"
 #include "log/log.h"
-#include <boost/redis/connection.hpp>
-#include <boost/redis/resp3/node.hpp>
+#include <hiredis/hiredis.h>
+#include <hiredis/async.h>
 #include <boost/asio/io_context.hpp>
-#include <boost/asio/executor_work_guard.hpp>
 #include <boost/asio/post.hpp>
-#include <thread>
+#include <boost/asio/posix/stream_descriptor.hpp>
 #include <memory>
 #include <atomic>
 #include <string>
 #include <vector>
 #include <functional>
-#include <optional>
 
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
 #include "async_simple/coro/Lazy.h"
 
-/// Redis 连接封装。
+/// Redis 连接封装（hiredis 异步 API + boost::asio reactor 适配）。
 ///
-/// 每个 RedisConnection 拥有独立的 io_context + 后台线程。
 /// 所有 API 都是异步的——回调 API（AsyncXxx）或协程 API（CoXxx）。
 ///
 /// 回调签名约定：
 ///   所有回调在 Redis IO 线程上执行。若需回到 Worker 线程，请使用 Worker::Post。
-///   cb(ec)         — 无返回值的操作
-///   cb(ec, value)  — 有返回值的操作
+///   cb(err)         — 无返回值的操作
+///   cb(err, value)  — 有返回值的操作
 ///
 /// 协程约定：
 ///   协程方法返回 async_simple::coro::Lazy<T>，可在 Worker 线程 co_await。
 ///   内部自动桥接 IO 线程，恢复时回到原调用线程的执行器。
 ///
+/// io_context 由调用者（连接池）提供，RedisConnection 不创建线程。
+/// io_context 应该由 IoServicePool 中的某个 IoWorker 运行。
+///
 class RedisConnection
 {
 public:
-    RedisConnection();
+    explicit RedisConnection(boost::asio::io_context& io_ctx);
     ~RedisConnection();
 
     RedisConnection(const RedisConnection&) = delete;
     RedisConnection& operator=(const RedisConnection&) = delete;
 
-    /// 连接 Redis 服务器。返回 true 表示连接成功。
+    /// 连接 Redis 服务器（含 AUTH/SELECT/HELLO 3/PING 握手）。返回 true 表示连接成功。
     bool Connect(const RedisConfig& cfg);
 
     /// 断开连接。
@@ -53,22 +54,22 @@ public:
     const RedisConfig& GetConfig() const { return config_; }
 
     /// 获取 io_context（用于投递异步任务）。
-    boost::asio::io_context& GetIoContext() { return io_context_; }
+    boost::asio::io_context& GetIoContext() { return io_ctx_; }
 
     // ════════════════════════════════════════════════════════════════════════
     // 异步回调接口
     // 所有回调在 Redis IO 线程上执行
-    // 回调约定: cb(boost::system::error_code, [value])
+    // 回调约定: cb(RedisError, [value])，RedisError 为真表示出错
     // ════════════════════════════════════════════════════════════════════════
 
     // ── 类型别名 ──
-    using AsyncCb       = std::function<void(boost::system::error_code)>;
-    using AsyncCbStr    = std::function<void(boost::system::error_code, std::string)>;
-    using AsyncCbInt    = std::function<void(boost::system::error_code, int64_t)>;
-    using AsyncCbDouble = std::function<void(boost::system::error_code, double)>;
-    using AsyncCbBool   = std::function<void(boost::system::error_code, bool)>;
-    using AsyncCbStrVec = std::function<void(boost::system::error_code, std::vector<std::string>)>;
-    using AsyncCbPairs  = std::function<void(boost::system::error_code, std::vector<std::pair<std::string, double>>)>;
+    using AsyncCb       = std::function<void(RedisError)>;
+    using AsyncCbStr    = std::function<void(RedisError, std::string)>;
+    using AsyncCbInt    = std::function<void(RedisError, int64_t)>;
+    using AsyncCbDouble = std::function<void(RedisError, double)>;
+    using AsyncCbBool   = std::function<void(RedisError, bool)>;
+    using AsyncCbStrVec = std::function<void(RedisError, std::vector<std::string>)>;
+    using AsyncCbPairs  = std::function<void(RedisError, std::vector<std::pair<std::string, double>>)>;
 
     // ── KV ──
     void AsyncSet(std::string key, std::string value, AsyncCb cb);
@@ -118,8 +119,8 @@ public:
     void AsyncPing(AsyncCbBool cb);
 
     // ── 泛型命令 ──
-    using GenericResponse = boost::redis::adapter::result<std::vector<boost::redis::resp3::node>>;
-    using AsyncCbGeneric = std::function<void(boost::system::error_code, GenericResponse)>;
+    using GenericResponse = RedisValue;
+    using AsyncCbGeneric  = std::function<void(RedisError, GenericResponse)>;
 
     void AsyncCall(const std::string& cmd, const std::vector<std::string>& args, AsyncCbGeneric cb);
     void AsyncEval(const std::string& script,
@@ -133,44 +134,44 @@ public:
     // ════════════════════════════════════════════════════════════════════════
 
     // ── KV ──
-    async_simple::coro::Lazy<bool>       CoSet(std::string key, std::string value);
-    async_simple::coro::Lazy<bool>       CoSetEx(std::string key, std::string value, int64_t ttl_seconds);
-    async_simple::coro::Lazy<std::string> CoGet(std::string key);
-    async_simple::coro::Lazy<int64_t>    CoDel(std::string key);
-    async_simple::coro::Lazy<bool>       CoExists(std::string key);
-    async_simple::coro::Lazy<int64_t>    CoIncr(std::string key);
-    async_simple::coro::Lazy<int64_t>    CoIncrBy(std::string key, int64_t delta);
+    async_simple::coro::Lazy<bool>                  CoSet(std::string key, std::string value);
+    async_simple::coro::Lazy<bool>                  CoSetEx(std::string key, std::string value, int64_t ttl_seconds);
+    async_simple::coro::Lazy<std::string>           CoGet(std::string key);
+    async_simple::coro::Lazy<int64_t>               CoDel(std::string key);
+    async_simple::coro::Lazy<bool>                  CoExists(std::string key);
+    async_simple::coro::Lazy<int64_t>               CoIncr(std::string key);
+    async_simple::coro::Lazy<int64_t>               CoIncrBy(std::string key, int64_t delta);
 
     // ── Hash ──
-    async_simple::coro::Lazy<int64_t>              CoHSet(std::string key, std::string field, std::string value);
+    async_simple::coro::Lazy<int64_t>               CoHSet(std::string key, std::string field, std::string value);
     async_simple::coro::Lazy<std::string>           CoHGet(std::string key, std::string field);
-    async_simple::coro::Lazy<int64_t>              CoHDel(std::string key, std::string field);
+    async_simple::coro::Lazy<int64_t>               CoHDel(std::string key, std::string field);
     async_simple::coro::Lazy<std::vector<std::string>> CoHKeys(std::string key);
     async_simple::coro::Lazy<std::vector<std::string>> CoHVals(std::string key);
-    async_simple::coro::Lazy<int64_t>              CoHLen(std::string key);
+    async_simple::coro::Lazy<int64_t>               CoHLen(std::string key);
 
     // ── List ──
-    async_simple::coro::Lazy<int64_t>              CoLPush(std::string key, std::string value);
-    async_simple::coro::Lazy<int64_t>              CoRPush(std::string key, std::string value);
+    async_simple::coro::Lazy<int64_t>               CoLPush(std::string key, std::string value);
+    async_simple::coro::Lazy<int64_t>               CoRPush(std::string key, std::string value);
     async_simple::coro::Lazy<std::string>           CoLPop(std::string key);
     async_simple::coro::Lazy<std::string>           CoRPop(std::string key);
-    async_simple::coro::Lazy<int64_t>              CoLLen(std::string key);
+    async_simple::coro::Lazy<int64_t>               CoLLen(std::string key);
 
     // ── Sorted Set ──
-    async_simple::coro::Lazy<int64_t>              CoZAdd(std::string key, double score, std::string member);
+    async_simple::coro::Lazy<int64_t>               CoZAdd(std::string key, double score, std::string member);
     async_simple::coro::Lazy<std::vector<std::string>> CoZRange(std::string key, int64_t start, int64_t stop, bool with_scores);
     async_simple::coro::Lazy<std::vector<std::string>> CoZRevRange(std::string key, int64_t start, int64_t stop, bool with_scores);
-    async_simple::coro::Lazy<int64_t>              CoZCard(std::string key);
-    async_simple::coro::Lazy<int64_t>              CoZRem(std::string key, std::string member);
-    async_simple::coro::Lazy<double>               CoZScore(std::string key, std::string member);
-    async_simple::coro::Lazy<int64_t>              CoZRank(std::string key, std::string member);
-    async_simple::coro::Lazy<int64_t>              CoZRevRank(std::string key, std::string member);
-    async_simple::coro::Lazy<int64_t>              CoZCount(std::string key, double min, double max);
-    async_simple::coro::Lazy<double>               CoZIncrBy(std::string key, std::string member, double delta);
+    async_simple::coro::Lazy<int64_t>               CoZCard(std::string key);
+    async_simple::coro::Lazy<int64_t>               CoZRem(std::string key, std::string member);
+    async_simple::coro::Lazy<double>                CoZScore(std::string key, std::string member);
+    async_simple::coro::Lazy<int64_t>               CoZRank(std::string key, std::string member);
+    async_simple::coro::Lazy<int64_t>               CoZRevRank(std::string key, std::string member);
+    async_simple::coro::Lazy<int64_t>               CoZCount(std::string key, double min, double max);
+    async_simple::coro::Lazy<double>                CoZIncrBy(std::string key, std::string member, double delta);
     async_simple::coro::Lazy<std::vector<std::string>> CoZRangeByScore(std::string key, double min, double max, bool with_scores);
     async_simple::coro::Lazy<std::vector<std::string>> CoZRevRangeByScore(std::string key, double min, double max, bool with_scores);
-    async_simple::coro::Lazy<int64_t>              CoZRemRangeByRank(std::string key, int64_t start, int64_t stop);
-    async_simple::coro::Lazy<int64_t>              CoZRemRangeByScore(std::string key, double min, double max);
+    async_simple::coro::Lazy<int64_t>               CoZRemRangeByRank(std::string key, int64_t start, int64_t stop);
+    async_simple::coro::Lazy<int64_t>               CoZRemRangeByScore(std::string key, double min, double max);
     async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> CoZRangeWithScores(std::string key, int64_t start, int64_t stop);
     async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> CoZRevRangeWithScores(std::string key, int64_t start, int64_t stop);
 
@@ -180,30 +181,12 @@ public:
     async_simple::coro::Lazy<bool>    CoPing();
 
     // ════════════════════════════════════════════════════════════════════════
-    // 底层异步执行（模板，不能放在 .cpp 中）
+    // 底层异步执行
     // ════════════════════════════════════════════════════════════════════════
 
-    /// 异步执行 Redis 命令（非阻塞）。
-    /// callback 在 Redis IO 线程上执行。
-    template <typename F, typename... Ts>
-    void AsyncExec(std::shared_ptr<boost::redis::request> req,
-                   std::shared_ptr<boost::redis::response<Ts...>> resp,
-                   F&& callback)
-    {
-        boost::asio::post(io_context_,
-            [this, req = std::move(req), resp, cb = std::forward<F>(callback)]() mutable {
-                if (!conn_)
-                {
-                    boost::system::error_code ec = boost::asio::error::not_connected;
-                    cb(std::move(ec), 0);
-                    return;
-                }
-                conn_->async_exec(*req, *resp,
-                    [cb = std::move(cb), req, resp](boost::system::error_code ec, std::size_t) mutable {
-                        cb(std::move(ec), 0);
-                    });
-            });
-    }
+    /// 投递一条 Redis 命令（非阻塞）。on_reply 在 Redis IO 线程上执行，
+    /// 参数为同步拷贝后的 RedisValue（断开/失败时为 Error 值）。
+    void PostCommand(std::vector<std::string> argv, std::function<void(RedisValue)> on_reply);
 
 private:
     // ── 协程辅助：将 AsyncCb 转为 Lazy<bool> ──
@@ -227,11 +210,43 @@ private:
     // ── 协程辅助：将 AsyncCbPairs 转为 Lazy<vector<pair<string, double>>> ──
     async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> CbToLazyPairs(std::function<void(AsyncCbPairs)> invoker);
 
+    // ── hiredis 事件回调（静态 thunk，经 ev.data 回到本对象）──
+    static void EvAddRead(void* privdata);
+    static void EvDelRead(void* privdata);
+    static void EvAddWrite(void* privdata);
+    static void EvDelWrite(void* privdata);
+    static void EvCleanup(void* privdata);
+    static void EvConnect(const redisAsyncContext* ac, int status);
+    static void EvDisconnect(const redisAsyncContext* ac, int status);
+    static void CommandCallback(redisAsyncContext* ac, void* r, void* privdata);
+
+    void OnAddRead();
+    void OnDelRead();
+    void OnAddWrite();
+    void OnDelWrite();
+    void OnCleanupEv();
+    void OnConnectStatus(const redisAsyncContext* ac, int status);
+    void OnDisconnectStatus(const redisAsyncContext* ac, int status);
+
+    // ── 连接握手链（AUTH → SELECT → HELLO 3 → PING）──
+    struct ConnectChain;
+    void StartConnectChain(const std::shared_ptr<ConnectChain>& chain);
+    void OnConnectStep(const std::shared_ptr<ConnectChain>& chain, RedisValue v);
+    void FailConnect();
+    void DisconnectInternal();
+
 private:
-    boost::asio::io_context                                           io_context_;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> work_guard_;
-    std::thread                                                       io_thread_;
-    std::unique_ptr<boost::redis::connection>        conn_;
-    std::atomic<bool>                                connected_{false};
-    RedisConfig                                      config_;
+    boost::asio::io_context&                                        io_ctx_;
+    redisAsyncContext*                                                async_ctx_{nullptr};
+    boost::asio::posix::stream_descriptor                             read_descriptor_;
+    boost::asio::posix::stream_descriptor                             write_descriptor_;
+    std::atomic<bool>                                                 connected_{false};
+    bool                                                              ctx_alive_{false};
+    bool                                                              read_requested_{false};
+    bool                                                              write_requested_{false};
+    bool                                                              read_in_progress_{false};
+    bool                                                              write_in_progress_{false};
+    RedisConfig                                                       config_;
+    std::shared_ptr<ConnectChain>                                     connect_state_;
+    std::function<void(RedisValue)>                                   pending_cb_;
 };

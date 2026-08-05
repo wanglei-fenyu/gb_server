@@ -1,9 +1,29 @@
-#include "register_redis.h"
 #include "redis_connection.h"
+#include "register_redis.h"
 #include "redis_pool.h"
 #include "worker/worker_manager.h"
 #include "log/log.h"
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 #include <mutex>
+#include <thread>
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 全局 Redis IO 上下文（供 Lua 全局连接池使用）。
+//
+// 与 PgConnectionPool 相同：io_context 由此处创建并在后台线程运行，
+// RedisConnection 只持有其引用，不创建线程。
+// ═════════════════════════════════════════════════════════════════════════════
+
+namespace {
+
+boost::asio::io_context            g_redis_io_ctx;
+using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
+std::unique_ptr<WorkGuard>         g_redis_work_guard;
+std::thread                        g_redis_io_thread;
+bool                               g_redis_thread_started = false;
+
+} // namespace
 
 // ═════════════════════════════════════════════════════════════════════════════
 // 全局 Redis 连接池（所有 Worker 共享）
@@ -14,7 +34,7 @@
 
 static RedisConnectionPool& GetRedisPool()
 {
-    static RedisConnectionPool* pool = new RedisConnectionPool();
+    static RedisConnectionPool* pool = new RedisConnectionPool(g_redis_io_ctx);
     return *pool;
 }
 
@@ -23,104 +43,84 @@ void CloseRedisPool()
     GetRedisPool().CloseAll();
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 泛型命令辅助函数 — RESP3 → Lua 类型转换
-// ═════════════════════════════════════════════════════════════════════════════
-
-/// 将 RESP3 节点树（前序遍历）转换为 sol::object。
-static auto NodesToLua(
-    lua_State* L,
-    const std::vector<boost::redis::resp3::node>& nodes,
-    std::size_t idx)
-    -> std::pair<sol::object, std::size_t>
+/// 启动全局 Redis IO 线程（仅调用一次）。
+static void EnsureRedisIoThread()
 {
-    using boost::redis::resp3::type;
-
-    if (idx >= nodes.size())
-        return {sol::lua_nil, idx};
-
-    const auto& node = nodes[idx];
-    std::size_t next = idx + 1;
-
-    if (boost::redis::resp3::is_aggregate(node.data_type))
+    if (!g_redis_thread_started)
     {
-        switch (node.data_type)
-        {
-        case type::array:
-        case type::set:
-        case type::push:
-        {
-            sol::table t = sol::state_view(L).create_table();
-            for (std::size_t j = 0; j < node.aggregate_size; j++)
-            {
-                auto pair = NodesToLua(L, nodes, next);
-                t[j + 1] = pair.first;
-                next = pair.second;
-            }
-            return {t, next};
-        }
-        case type::map:
-        case type::attribute:
-        {
-            sol::table t = sol::state_view(L).create_table();
-            for (std::size_t j = 0; j < node.aggregate_size; j++)
-            {
-                auto key_pair = NodesToLua(L, nodes, next);
-                auto val_pair = NodesToLua(L, nodes, key_pair.second);
-                t[key_pair.first] = val_pair.first;
-                next = val_pair.second;
-            }
-            return {t, next};
-        }
-        default:
-            return {sol::lua_nil, next};
-        }
-    }
-    else
-    {
-        switch (node.data_type)
-        {
-        case type::null:
-            return {sol::lua_nil, next};
-        case type::number:
-            try { return {sol::make_object(L, std::stoll(node.value)), next}; }
-            catch (...) { return {sol::make_object(L, std::stod(node.value)), next}; }
-        case type::boolean:
-            return {sol::make_object(L,
-                    node.value == "t" || node.value == "true" || node.value == "1"), next};
-        case type::doublean:
-            return {sol::make_object(L, std::stod(node.value)), next};
-        case type::simple_error:
-        case type::blob_error:
-            LOG_ERROR("Redis error: {}", node.value);
-            return {sol::lua_nil, next};
-        case type::big_number:
-        default:
-            return {sol::make_object(L, node.value), next};
-        }
+        g_redis_thread_started = true;
+        g_redis_work_guard = std::make_unique<WorkGuard>(
+            boost::asio::make_work_guard(g_redis_io_ctx));
+        g_redis_io_thread = std::thread([]() { g_redis_io_ctx.run(); });
+        g_redis_io_thread.detach();
     }
 }
 
-/// 将 GenericResponse 转换为 sol::object。
-static auto GenericRespToLua(lua_State* L,
-                             const RedisConnection::GenericResponse& resp)
-    -> sol::object
+// ════════════════════════════════════════════════════════════════════════
+// 泛型命令辅助函数 — RedisValue → Lua 类型转换
+// ════════════════════════════════════════════════════════════════════════
+
+/// 将 RedisValue 递归转换为 sol::object。
+static auto RedisValueToLua(lua_State* L, const RedisValue& v) -> sol::object
 {
-    if (!resp.has_value())
+    if (v.is_nil())
+        return sol::lua_nil;
+    if (v.is_error())
     {
-        LOG_ERROR("Redis generic response error: type={} diagnostic={}",
-                  static_cast<int>(resp.error().data_type),
-                  resp.error().diagnostic);
+        LOG_ERROR("Redis error: {}", v.error_msg);
         return sol::lua_nil;
     }
-
-    const auto& nodes = resp.value();
-    if (nodes.empty())
-        return sol::lua_nil;
-
-    auto obj_pair = NodesToLua(L, nodes, 0);
-    return obj_pair.first;
+    if (v.is_bool())
+        return sol::make_object(L, v.bool_val);
+    if (v.is_int())
+        return sol::make_object(L, v.int_val);
+    if (v.is_double())
+        return sol::make_object(L, v.dbl_val);
+    if (v.is_str())
+        return sol::make_object(L, v.str_val);
+    if (v.is_array())
+    {
+        sol::table t = sol::state_view(L).create_table();
+        for (size_t i = 0; i < v.array_val->size(); ++i)
+            t[i + 1] = RedisValueToLua(L, (*v.array_val)[i]);
+        // Check if this is a flat [member, score, member, score, ...] array
+        // (RESP2 ZRANGE WITHSCORES) — convert to table of {member, score} pairs
+        if (v.array_val->size() >= 2 && v.array_val->size() % 2 == 0)
+        {
+            bool is_flat_pairs = true;
+            for (size_t i = 0; i < v.array_val->size(); i += 2)
+            {
+                if (!(*v.array_val)[i].is_str())
+                {
+                    is_flat_pairs = false;
+                    break;
+                }
+            }
+            if (is_flat_pairs)
+            {
+                sol::table pairs_tbl = sol::state_view(L).create_table();
+                for (size_t i = 0; i < v.array_val->size(); i += 2)
+                {
+                    sol::table entry = sol::state_view(L).create_table();
+                    entry["member"] = (*v.array_val)[i].as_str();
+                    entry["score"]  = (*v.array_val)[i + 1].as_double();
+                    pairs_tbl[i / 2 + 1] = std::move(entry);
+                }
+                return pairs_tbl;
+            }
+        }
+        return t;
+    }
+    if (v.is_map())
+    {
+        sol::table t = sol::state_view(L).create_table();
+        for (const auto& kv : *v.map_val)
+            t[kv.first] = RedisValueToLua(L, kv.second);
+        return t;
+    }
+    return sol::lua_nil;
 }
+
 
 static std::once_flag& GetRedisInitFlag()
 {
@@ -152,6 +152,7 @@ static RedisConfig ParseConfig(const sol::table& cfg)
 /// 从 Lua 获取连接（内部辅助）。
 static RedisConnection* GetConn()
 {
+    EnsureRedisIoThread();
     std::call_once(GetRedisInitFlag(), []() {
         RedisConfig default_cfg;
         LOG_WARN("redis.Connect() not called, using default config {}:{}",
@@ -224,20 +225,20 @@ public:
     }
 
     /// 无值回调: 仅传递 ec。
-    void PostCb(boost::system::error_code ec)
+    void PostCb(RedisError ec)
     {
         auto w = worker_.lock();
         if (!w) return;
         auto cb_ptr = cb_;
         w->Post([cb_ptr, ec]() {
             if (cb_ptr->valid())
-                (*cb_ptr)(ec ? ec.message() : "");
+                (*cb_ptr)(ec ? ec.message : "");
         });
     }
 
     /// 有值回调: 传递 ec + 值。
     template <typename T>
-    void PostCb(boost::system::error_code ec, T val)
+    void PostCb(RedisError ec, T val)
     {
         auto w = worker_.lock();
         if (!w) return;
@@ -246,7 +247,7 @@ public:
             if (cb_ptr->valid())
             {
                 if (ec)
-                    (*cb_ptr)(ec.message(), std::move(val));
+                    (*cb_ptr)(ec.message, std::move(val));
                 else
                     (*cb_ptr)("", std::move(val));
             }
@@ -254,7 +255,7 @@ public:
     }
 
     /// 字符串回调。
-    void PostCbStr(boost::system::error_code ec, std::string val)
+    void PostCbStr(RedisError ec, std::string val)
     {
         auto w = worker_.lock();
         if (!w) return;
@@ -262,21 +263,21 @@ public:
         w->Post([cb_ptr, ec, val = std::move(val)]() mutable {
             if (cb_ptr->valid())
             {
-                if (ec) (*cb_ptr)(ec.message(), "");
+                if (ec) (*cb_ptr)(ec.message, "");
                 else    (*cb_ptr)("", std::move(val));
             }
         });
     }
 
     /// 布尔回调。
-    void PostCbBool(boost::system::error_code ec, bool val)
+    void PostCbBool(RedisError ec, bool val)
     {
         auto w = worker_.lock();
         if (!w) { LOG_WARN("[PostCbBool] worker expired"); return; }
         auto cb_ptr = cb_;
         LOG_INFO("[PostCbBool] posting to worker: cb_valid={} ec={} val={}",
                  cb_ptr->valid() ? "yes" : "no",
-                 ec ? ec.message() : "none",
+                 ec ? ec.message : "none",
                  static_cast<int>(val));
         w->Post([cb_ptr, ec]() {
             LOG_INFO("[PostCbBool] lambda ON WORKER: cb_valid={}", cb_ptr->valid() ? "yes" : "no");
@@ -284,7 +285,7 @@ public:
             {
                 sol::protected_function_result result;
                 if (ec)
-                    result = (*cb_ptr)(ec.message(), "");
+                    result = (*cb_ptr)(ec.message, "");
                 else
                     result = (*cb_ptr)("", true);
                 if (!result.valid())
@@ -301,7 +302,7 @@ public:
     }
 
     /// 向量回调。
-    void PostCbStrVec(boost::system::error_code ec, std::vector<std::string> val)
+    void PostCbStrVec(RedisError ec, std::vector<std::string> val)
     {
         auto w = worker_.lock();
         if (!w) return;
@@ -309,14 +310,14 @@ public:
         w->Post([cb_ptr, ec, val = std::move(val)]() mutable {
             if (cb_ptr->valid())
             {
-                if (ec) (*cb_ptr)(ec.message(), sol::nil);
+                if (ec) (*cb_ptr)(ec.message, sol::nil);
                 else    (*cb_ptr)("", sol::as_table(std::move(val)));
             }
         });
     }
 
     /// 双精度回调。
-    void PostCbDouble(boost::system::error_code ec, double val)
+    void PostCbDouble(RedisError ec, double val)
     {
         auto w = worker_.lock();
         if (!w) return;
@@ -324,14 +325,14 @@ public:
         w->Post([cb_ptr, ec, val]() {
             if (cb_ptr->valid())
             {
-                if (ec) (*cb_ptr)(ec.message(), -1.0);
+                if (ec) (*cb_ptr)(ec.message, -1.0);
                 else    (*cb_ptr)("", val);
             }
         });
     }
 
     /// 配对回调（member+score pairs → Lua table of {member, score}）。
-    void PostCbPairs(boost::system::error_code ec,
+    void PostCbPairs(RedisError ec,
                      std::vector<std::pair<std::string, double>> pairs)
     {
         auto w = worker_.lock();
@@ -341,7 +342,7 @@ public:
             if (!cb_ptr->valid()) return;
             if (ec)
             {
-                (*cb_ptr)(ec.message(), sol::nil);
+                (*cb_ptr)(ec.message, sol::nil);
                 return;
             }
             lua_State* L = cb_ptr->lua_state();
@@ -359,7 +360,7 @@ public:
     }
 
     /// 泛型回调（GenericResponse → Lua）。
-    void PostCbGeneric(boost::system::error_code ec,
+    void PostCbGeneric(RedisError ec,
                        RedisConnection::GenericResponse resp)
     {
         auto w = worker_.lock();
@@ -368,11 +369,11 @@ public:
         w->Post([cb_ptr, ec, resp = std::move(resp)]() mutable {
             if (!cb_ptr->valid()) return;
             if (ec)
-                (*cb_ptr)(ec.message(), sol::lua_nil);
+                (*cb_ptr)(ec.message, sol::lua_nil);
             else
             {
                 lua_State* L = cb_ptr->lua_state();
-                (*cb_ptr)("", GenericRespToLua(L, resp));
+                (*cb_ptr)("", RedisValueToLua(L, resp));
             }
         });
     }
@@ -396,6 +397,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
     ///                 pool_size=4, timeout=5000})
     /// @return boolean 是否连接成功（第一次调用后忽略后续参数）
     redis["Connect"] = [](sol::table cfg) -> bool {
+        EnsureRedisIoThread();
         RedisConfig config = ParseConfig(cfg);
         bool        ok     = false;
         std::call_once(GetRedisInitFlag(), [&]() {
@@ -428,7 +430,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncSet(key, value, [bridge](boost::system::error_code ec) {
+        c->AsyncSet(key, value, [bridge](RedisError ec) {
             bridge->PostCb(std::move(ec));
         });
     };
@@ -440,7 +442,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncSetEx(key, value, ttl, [bridge](boost::system::error_code ec) {
+        c->AsyncSetEx(key, value, ttl, [bridge](RedisError ec) {
             bridge->PostCb(std::move(ec));
         });
     };
@@ -451,7 +453,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncGet(key, [bridge](boost::system::error_code ec, std::string val) {
+        c->AsyncGet(key, [bridge](RedisError ec, std::string val) {
             bridge->PostCbStr(std::move(ec), std::move(val));
         });
     };
@@ -462,7 +464,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncDel(key, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncDel(key, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -473,7 +475,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncExists(key, [bridge](boost::system::error_code ec, bool exists) {
+        c->AsyncExists(key, [bridge](RedisError ec, bool exists) {
             bridge->PostCbBool(std::move(ec), exists);
         });
     };
@@ -484,7 +486,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncIncr(key, [bridge](boost::system::error_code ec, int64_t val) {
+        c->AsyncIncr(key, [bridge](RedisError ec, int64_t val) {
             bridge->PostCb(std::move(ec), val);
         });
     };
@@ -495,7 +497,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncIncrBy(key, delta, [bridge](boost::system::error_code ec, int64_t val) {
+        c->AsyncIncrBy(key, delta, [bridge](RedisError ec, int64_t val) {
             bridge->PostCb(std::move(ec), val);
         });
     };
@@ -509,7 +511,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncHSet(key, field, value, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncHSet(key, field, value, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -521,7 +523,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncHGet(key, field, [bridge](boost::system::error_code ec, std::string val) {
+        c->AsyncHGet(key, field, [bridge](RedisError ec, std::string val) {
             bridge->PostCbStr(std::move(ec), std::move(val));
         });
     };
@@ -533,7 +535,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncHDel(key, field, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncHDel(key, field, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -544,7 +546,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncHKeys(key, [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+        c->AsyncHKeys(key, [bridge](RedisError ec, std::vector<std::string> val) {
             bridge->PostCbStrVec(std::move(ec), std::move(val));
         });
     };
@@ -555,7 +557,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncHVals(key, [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+        c->AsyncHVals(key, [bridge](RedisError ec, std::vector<std::string> val) {
             bridge->PostCbStrVec(std::move(ec), std::move(val));
         });
     };
@@ -566,7 +568,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncHLen(key, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncHLen(key, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -580,7 +582,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncLPush(key, value, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncLPush(key, value, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -592,7 +594,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncRPush(key, value, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncRPush(key, value, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -603,7 +605,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncLPop(key, [bridge](boost::system::error_code ec, std::string val) {
+        c->AsyncLPop(key, [bridge](RedisError ec, std::string val) {
             bridge->PostCbStr(std::move(ec), std::move(val));
         });
     };
@@ -614,7 +616,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncRPop(key, [bridge](boost::system::error_code ec, std::string val) {
+        c->AsyncRPop(key, [bridge](RedisError ec, std::string val) {
             bridge->PostCbStr(std::move(ec), std::move(val));
         });
     };
@@ -625,7 +627,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncLLen(key, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncLLen(key, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -639,7 +641,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZAdd(key, score, member, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncZAdd(key, score, member, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -652,7 +654,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
         c->AsyncZRange(key, start, stop, with_scores,
-                       [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+                       [bridge](RedisError ec, std::vector<std::string> val) {
                            bridge->PostCbStrVec(std::move(ec), std::move(val));
                        });
     };
@@ -665,7 +667,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
         c->AsyncZRevRange(key, start, stop, with_scores,
-                          [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+                          [bridge](RedisError ec, std::vector<std::string> val) {
                               bridge->PostCbStrVec(std::move(ec), std::move(val));
                           });
     };
@@ -676,7 +678,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZCard(key, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncZCard(key, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -688,7 +690,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZRem(key, member, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncZRem(key, member, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -700,7 +702,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZScore(key, member, [bridge](boost::system::error_code ec, double score) {
+        c->AsyncZScore(key, member, [bridge](RedisError ec, double score) {
             bridge->PostCbDouble(std::move(ec), score);
         });
     };
@@ -712,7 +714,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZRank(key, member, [bridge](boost::system::error_code ec, int64_t rank) {
+        c->AsyncZRank(key, member, [bridge](RedisError ec, int64_t rank) {
             bridge->PostCb(std::move(ec), rank);
         });
     };
@@ -724,7 +726,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZRevRank(key, member, [bridge](boost::system::error_code ec, int64_t rank) {
+        c->AsyncZRevRank(key, member, [bridge](RedisError ec, int64_t rank) {
             bridge->PostCb(std::move(ec), rank);
         });
     };
@@ -736,7 +738,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZCount(key, min, max, [bridge](boost::system::error_code ec, int64_t count) {
+        c->AsyncZCount(key, min, max, [bridge](RedisError ec, int64_t count) {
             bridge->PostCb(std::move(ec), count);
         });
     };
@@ -748,7 +750,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZIncrBy(key, member, delta, [bridge](boost::system::error_code ec, double score) {
+        c->AsyncZIncrBy(key, member, delta, [bridge](RedisError ec, double score) {
             bridge->PostCbDouble(std::move(ec), score);
         });
     };
@@ -761,7 +763,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
         c->AsyncZRangeByScore(key, min, max, with_scores,
-                              [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+                              [bridge](RedisError ec, std::vector<std::string> val) {
                                   bridge->PostCbStrVec(std::move(ec), std::move(val));
                               });
     };
@@ -774,7 +776,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
         c->AsyncZRevRangeByScore(key, min, max, with_scores,
-                                 [bridge](boost::system::error_code ec, std::vector<std::string> val) {
+                                 [bridge](RedisError ec, std::vector<std::string> val) {
                                      bridge->PostCbStrVec(std::move(ec), std::move(val));
                                  });
     };
@@ -786,7 +788,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZRemRangeByRank(key, start, stop, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncZRemRangeByRank(key, start, stop, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -798,7 +800,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncZRemRangeByScore(key, min, max, [bridge](boost::system::error_code ec, int64_t n) {
+        c->AsyncZRemRangeByScore(key, min, max, [bridge](RedisError ec, int64_t n) {
             bridge->PostCb(std::move(ec), n);
         });
     };
@@ -811,7 +813,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
         c->AsyncZRangeWithScores(key, start, stop,
-                                 [bridge](boost::system::error_code ec,
+                                 [bridge](RedisError ec,
                                           std::vector<std::pair<std::string, double>> pairs) {
                                      bridge->PostCbPairs(std::move(ec), std::move(pairs));
                                  });
@@ -825,7 +827,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
         c->AsyncZRevRangeWithScores(key, start, stop,
-                                    [bridge](boost::system::error_code ec,
+                                    [bridge](RedisError ec,
                                              std::vector<std::pair<std::string, double>> pairs) {
                                         bridge->PostCbPairs(std::move(ec), std::move(pairs));
                                     });
@@ -839,7 +841,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncExpire(key, seconds, [bridge](boost::system::error_code ec, bool) {
+        c->AsyncExpire(key, seconds, [bridge](RedisError ec, bool) {
             bridge->PostCb(std::move(ec));
         });
     };
@@ -850,7 +852,7 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         auto   w = gb::WorkerManager::Instance()->GetCurWorker();
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncTTL(key, [bridge](boost::system::error_code ec, int64_t ttl) {
+        c->AsyncTTL(key, [bridge](RedisError ec, int64_t ttl) {
             bridge->PostCb(std::move(ec), ttl);
         });
     };
@@ -862,8 +864,8 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         LOG_INFO("[AsyncPing] entered: c={} w={}", static_cast<void*>(c), static_cast<void*>(w.get()));
         if (!c || !w) return;
         auto bridge = LuaCbBridge::Create(w, std::move(cb));
-        c->AsyncPing([bridge](boost::system::error_code ec, bool ok) {
-            LOG_INFO("[AsyncPing] callback fired, ec={} ok={}", ec ? ec.message() : "none", ok);
+        c->AsyncPing([bridge](RedisError ec, bool ok) {
+            LOG_INFO("[AsyncPing] callback fired, ec={} ok={}", ec ? ec.message : "none", ok);
             bridge->PostCbBool(std::move(ec), ok);
         });
     };
@@ -898,15 +900,15 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
         if (!c || !w) return;
 
         auto cb_ptr = std::make_shared<sol::function>(std::move(cb));
-        c->AsyncCall(cmd, str_args, [w, cb_ptr](boost::system::error_code ec,
+        c->AsyncCall(cmd, str_args, [w, cb_ptr](RedisError ec,
                                                  RedisConnection::GenericResponse resp) {
             w->Post([cb_ptr, ec, resp = std::move(resp)]() mutable {
                 if (!cb_ptr->valid()) return;
                 lua_State* L = cb_ptr->lua_state();
                 if (ec)
-                    (*cb_ptr)(ec.message(), sol::lua_nil);
+                    (*cb_ptr)(ec.message, sol::lua_nil);
                 else
-                    (*cb_ptr)("", GenericRespToLua(L, resp));
+                    (*cb_ptr)("", RedisValueToLua(L, resp));
             });
         });
     };
@@ -938,15 +940,15 @@ void register_redis(std::shared_ptr<Script>& scriptPtr)
 
         auto cb_ptr = std::make_shared<sol::function>(std::move(cb));
         c->AsyncEval(script, to_str_vec(keys), to_str_vec(args),
-                     [w, cb_ptr](boost::system::error_code ec,
+                     [w, cb_ptr](RedisError ec,
                                   RedisConnection::GenericResponse resp) {
             w->Post([cb_ptr, ec, resp = std::move(resp)]() mutable {
                 if (!cb_ptr->valid()) return;
                 lua_State* L = cb_ptr->lua_state();
                 if (ec)
-                    (*cb_ptr)(ec.message(), sol::lua_nil);
+                    (*cb_ptr)(ec.message, sol::lua_nil);
                 else
-                    (*cb_ptr)("", GenericRespToLua(L, resp));
+                    (*cb_ptr)("", RedisValueToLua(L, resp));
             });
         });
     };

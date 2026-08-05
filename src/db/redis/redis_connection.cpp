@@ -1,171 +1,650 @@
 #include "redis_connection.h"
+#include "redis_value.h"
+#include "log/log.h"
 #include "async_simple/coro/FutureAwaiter.h"
-#include <boost/redis/src.hpp>
+#include <boost/asio/post.hpp>
 #include <chrono>
-#include <optional>
+#include <cstdlib>
 #include <memory>
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 内部辅助：从 adapter::result<T> 中安全取值
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
+// 匿名辅助：安全数值转换（避免异常逃逸到 hiredis 回调）
+// ════════════════════════════════════════════════════════════════════════
 
-namespace {
-
-template <typename T>
-static bool ExtractValue(const boost::redis::adapter::result<T>& result, T& out)
+namespace
 {
-    if (!result.has_value())
+
+double SafeStod(const std::string& s)
+{
+    if (s.empty())
+        return 0.0;
+    char* end = nullptr;
+    double v  = std::strtod(s.c_str(), &end);
+    if (end == s.c_str())
     {
-        LOG_ERROR("Redis result error: type={} diagnostic={}",
-                  static_cast<int>(result.error().data_type),
-                  result.error().diagnostic);
-        return false;
+        LOG_ERROR("Redis parse double failed: \"{}\"", s);
+        return 0.0;
     }
-    out = result.value();
-    return true;
+    return v;
 }
 
-template <typename T>
-static bool ExtractOptionalValue(
-    const boost::redis::adapter::result<std::optional<T>>& result, T& out)
+int64_t SafeStoll(const std::string& s)
 {
-    if (!result.has_value())
+    if (s.empty())
+        return 0;
+    char* end = nullptr;
+    long long v = std::strtoll(s.c_str(), &end, 10);
+    if (end == s.c_str())
     {
-        LOG_ERROR("Redis result error: type={} diagnostic={}",
-                  static_cast<int>(result.error().data_type),
-                  result.error().diagnostic);
-        return false;
+        LOG_ERROR("Redis parse int failed: \"{}\"", s);
+        return 0;
     }
-    auto& opt = result.value();
-    if (!opt.has_value())
-        return false;
-    out = opt.value();
-    return true;
+    return static_cast<int64_t>(v);
+}
+
+/// 将 RedisValue 转为 string 向量。兼容 RESP2（扁平数组）和 RESP3（嵌套数组）。
+std::vector<std::string> ToStrArray(const RedisValue& v)
+{
+    std::vector<std::string> out;
+    if (v.is_nil() || !v.is_array() || !v.array_val)
+        return out;
+    for (const auto& item : *v.array_val)
+    {
+        if (item.is_array())
+        {
+            if (item.array_val)
+            {
+                for (const auto& sub : *item.array_val)
+                    out.push_back(sub.is_nil() ? std::string{} : sub.as_str());
+            }
+        }
+        else
+        {
+            out.push_back(item.is_nil() ? std::string{} : item.as_str());
+        }
+    }
+    return out;
+}
+
+/// 将 RedisValue 转为 (member, score) pairs。兼容 RESP2（扁平）和 RESP3（嵌套）。
+std::vector<std::pair<std::string, double>> ToPairs(const RedisValue& v)
+{
+    std::vector<std::pair<std::string, double>> out;
+    if (v.is_nil() || !v.is_array() || !v.array_val)
+        return out;
+    const auto& arr = *v.array_val;
+    if (!arr.empty() && arr[0].is_array())
+    {
+        // RESP3: [[member, score], ...]
+        for (const auto& item : arr)
+        {
+            if (item.is_array() && item.array_val && item.array_val->size() >= 2)
+                out.emplace_back((*item.array_val)[0].as_str(), (*item.array_val)[1].as_double());
+        }
+    }
+    else
+    {
+        // RESP2: [member, score, member, score, ...]
+        out.reserve(arr.size() / 2);
+        for (size_t i = 0; i + 1 < arr.size(); i += 2)
+            out.emplace_back(arr[i].as_str(), SafeStod(arr[i + 1].as_str()));
+    }
+    return out;
+}
+
+/// 将 RedisValue 转为 int64_t。处理 nil（返回 0）、Int、Bool、Double、Str。
+int64_t ToInt(const RedisValue& v)
+{
+    if (v.is_nil())
+        return 0;
+    if (v.is_int())
+        return v.int_val;
+    if (v.is_bool())
+        return v.bool_val ? 1 : 0;
+    if (v.is_double())
+        return static_cast<int64_t>(v.dbl_val);
+    if (v.is_str())
+        return SafeStoll(v.str_val);
+    return 0;
+}
+
+/// 将 RedisValue 转为 double。处理 nil（返回 0.0）、Int、Bool、Double、Str。
+double ToDouble(const RedisValue& v)
+{
+    if (v.is_nil())
+        return 0.0;
+    if (v.is_double())
+        return v.dbl_val;
+    if (v.is_int())
+        return static_cast<double>(v.int_val);
+    if (v.is_bool())
+        return v.bool_val ? 1.0 : 0.0;
+    if (v.is_str())
+        return SafeStod(v.str_val);
+    return 0.0;
+}
+
+/// 将 RedisValue 转为 string。处理 nil（返回空串）、Str、Int、Double、Bool。
+std::string ToString(const RedisValue& v)
+{
+    if (v.is_nil())
+        return {};
+    if (v.is_str())
+        return v.str_val;
+    if (v.is_int())
+        return std::to_string(v.int_val);
+    if (v.is_double())
+        return std::to_string(v.dbl_val);
+    if (v.is_bool())
+        return v.bool_val ? "1" : "0";
+    return {};
 }
 
 } // anonymous namespace
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 // 生命周期
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 
-RedisConnection::RedisConnection()
-    : work_guard_(boost::asio::make_work_guard(io_context_))
+RedisConnection::RedisConnection(boost::asio::io_context& io_ctx)
+    : io_ctx_(io_ctx)
+    , read_descriptor_(io_ctx_)
+    , write_descriptor_(io_ctx_)
 {
-    conn_ = std::make_unique<boost::redis::connection>(io_context_, boost::redis::logger{});
-    io_thread_ = std::thread([this]() { io_context_.run(); });
-    connected_ = false;
 }
 
 RedisConnection::~RedisConnection()
 {
-    connected_ = false;
-
-    // Post cancel to the io_context — the IO thread (which is running inside
-    // io_context::run()) will process it synchronously, driving the cancellation
-    // chain (run_op → parallel_group → reader/writer → timer → socket I/O)
-    // to completion before run() returns.
-    if (conn_) {
-        boost::asio::post(io_context_, [this]() {
-            conn_->cancel(boost::redis::operation::all);
+    // 强制释放 hiredis 上下文（若仍存活）。
+    // 注意：我们不拥有 io_context，不应在析构中 join 线程或重置 work_guard。
+    if (ctx_alive_ || async_ctx_ != nullptr)
+    {
+        boost::asio::post(io_ctx_, [this]() {
+            ctx_alive_ = false;
+            auto* ac  = async_ctx_;
+            async_ctx_ = nullptr;
+            if (ac)
+                redisAsyncFree(ac);
         });
     }
-
-    // Drop the work guard so io_context::run() can exit naturally once all
-    // handlers (including the cancellation chain) have been processed.
-    work_guard_.reset();
-
-    // Wait for the IO thread to finish — run() will process the cancel lambda
-    // and the entire cancellation chain, ensuring all socket I/O is cancelled
-    // before the connection is destroyed.
-    if (io_thread_.joinable())
-        io_thread_.join();
-
-    // conn_ destroyed implicitly — socket has no pending I/O.
-    // io_context_ destroyed last (original declaration order).
 }
+
+struct RedisConnection::ConnectChain
+{
+    std::promise<bool> promise;
+    std::atomic<bool> done{false};
+    int step{0};
+};
 
 bool RedisConnection::Connect(const RedisConfig& cfg)
 {
     config_ = cfg;
+    connected_ = false;
 
-    boost::redis::config redis_cfg;
-    redis_cfg.addr.host = cfg.host;
-    redis_cfg.addr.port = std::to_string(cfg.port);
-    if (!cfg.password.empty())
-        redis_cfg.password = cfg.password;
-    redis_cfg.health_check_interval = std::chrono::seconds::zero();
-
-    std::promise<bool> conn_promise;
-    auto               conn_fut = conn_promise.get_future();
-
-    boost::asio::post(io_context_, [this, redis_cfg, &conn_promise]() {
-        conn_->async_run(redis_cfg,
-                         [](boost::system::error_code ec) {
-                             if (ec)
-                                 LOG_ERROR("Redis async_run stopped: {}", ec.message());
-                         });
-
-        // PING 验证连接 — 用 shared_ptr 确保对象活到回调完成
-        auto ping_req  = std::make_shared<boost::redis::request>();
-        auto ping_resp = std::make_shared<boost::redis::response<std::string>>();
-        ping_req->push("PING");
-        conn_->async_exec(*ping_req, *ping_resp,
-                          [&conn_promise, ping_req, ping_resp](boost::system::error_code ec, auto) {
-                              conn_promise.set_value(!ec);
-                          });
-    });
-
-    bool ok = conn_fut.get();
-    connected_ = ok;
-
-    if (ok)
+    if (ctx_alive_)
     {
-        if (cfg.db_index >= 0)
-        {
-            // SELECT 也用异步方式做 — shared_ptr 确保对象活到回调完成
-            std::promise<void> select_promise;
-            auto               select_fut = select_promise.get_future();
-            auto select_req  = std::make_shared<boost::redis::request>();
-            auto select_resp = std::make_shared<boost::redis::response<std::string>>();
-            select_req->push("SELECT", cfg.db_index);
-            boost::asio::post(io_context_, [this, select_req, select_resp, &select_promise]() {
-                conn_->async_exec(*select_req, *select_resp,
-                                  [&select_promise, select_req, select_resp](boost::system::error_code, auto) {
-                                      select_promise.set_value();
-                                  });
-            });
-            select_fut.wait();
-        }
-        LOG_INFO("Redis connected: {}:{}/{}", cfg.host, cfg.port, cfg.db_index);
-    }
-    else
-    {
-        LOG_ERROR("Redis connect failed: {}:{}", cfg.host, cfg.port);
+        LOG_WARN("RedisConnection::Connect called while a context is alive; disconnecting first");
+        Disconnect();
     }
 
-    return ok;
+    auto chain = std::make_shared<ConnectChain>();
+    connect_state_ = chain;
+    auto fut = chain->promise.get_future();
+
+    boost::asio::post(io_ctx_, [this, chain]() { StartConnectChain(chain); });
+
+    int timeout_ms = cfg.timeout_ms + 2000;
+    if (fut.wait_for(std::chrono::milliseconds(timeout_ms)) == std::future_status::ready)
+    {
+        bool ok = fut.get();
+        connected_ = ok;
+        return ok;
+    }
+
+    // 超时 — FailConnect 会 post 到 IO 线程清理上下文
+    FailConnect();
+    return false;
 }
 
 void RedisConnection::Disconnect()
 {
     bool was_connected = connected_.exchange(false);
-    boost::asio::post(io_context_, [this]() { conn_->cancel(); });
+    boost::asio::post(io_ctx_, [this]() { DisconnectInternal(); });
     if (was_connected)
         LOG_INFO("Redis disconnected: {}:{}", config_.host, config_.port);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// 协程辅助：将回调 API 桥接为协程 API
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
+// KV — 异步回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::AsyncSet(std::string key, std::string value, AsyncCb cb)
+{
+    PostCommand({"SET", std::move(key), std::move(value)},
+                [cb = std::move(cb)](RedisValue v) {
+                    cb(v.is_error() ? v.err() : RedisError{});
+                });
+}
+
+void RedisConnection::AsyncSetEx(std::string key, std::string value,
+                                      int64_t ttl_seconds, AsyncCb cb)
+{
+    PostCommand({"SETEX", std::move(key), std::to_string(ttl_seconds), std::move(value)},
+                [cb = std::move(cb)](RedisValue v) {
+                    cb(v.is_error() ? v.err() : RedisError{});
+                });
+}
+
+void RedisConnection::AsyncGet(std::string key, AsyncCbStr cb)
+{
+    PostCommand({"GET", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToString(v));
+                });
+}
+
+void RedisConnection::AsyncDel(std::string key, AsyncCbInt cb)
+{
+    PostCommand({"DEL", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncExists(std::string key, AsyncCbBool cb)
+{
+    PostCommand({"EXISTS", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), false); return; }
+                    cb(RedisError{}, ToInt(v) > 0);
+                });
+}
+
+void RedisConnection::AsyncIncr(std::string key, AsyncCbInt cb)
+{
+    PostCommand({"INCR", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncIncrBy(std::string key, int64_t delta, AsyncCbInt cb)
+{
+    PostCommand({"INCRBY", std::move(key), std::to_string(delta)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Hash — 异步回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::AsyncHSet(std::string key, std::string field,
+                                    std::string value, AsyncCbInt cb)
+{
+    PostCommand({"HSET", std::move(key), std::move(field), std::move(value)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncHGet(std::string key, std::string field, AsyncCbStr cb)
+{
+    PostCommand({"HGET", std::move(key), std::move(field)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToString(v));
+                });
+}
+
+void RedisConnection::AsyncHDel(std::string key, std::string field, AsyncCbInt cb)
+{
+    PostCommand({"HDEL", std::move(key), std::move(field)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncHKeys(std::string key, AsyncCbStrVec cb)
+{
+    PostCommand({"HKEYS", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToStrArray(v));
+                });
+}
+
+void RedisConnection::AsyncHVals(std::string key, AsyncCbStrVec cb)
+{
+    PostCommand({"HVALS", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToStrArray(v));
+                });
+}
+
+void RedisConnection::AsyncHLen(std::string key, AsyncCbInt cb)
+{
+    PostCommand({"HLEN", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// List — 异步回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::AsyncLPush(std::string key, std::string value, AsyncCbInt cb)
+{
+    PostCommand({"LPUSH", std::move(key), std::move(value)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncRPush(std::string key, std::string value, AsyncCbInt cb)
+{
+    PostCommand({"RPUSH", std::move(key), std::move(value)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncLPop(std::string key, AsyncCbStr cb)
+{
+    PostCommand({"LPOP", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToString(v));
+                });
+}
+
+void RedisConnection::AsyncRPop(std::string key, AsyncCbStr cb)
+{
+    PostCommand({"RPOP", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToString(v));
+                });
+}
+
+void RedisConnection::AsyncLLen(std::string key, AsyncCbInt cb)
+{
+    PostCommand({"LLEN", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Sorted Set — 异步回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::AsyncZAdd(std::string key, double score,
+                                    std::string member, AsyncCbInt cb)
+{
+    PostCommand({"ZADD", std::move(key), std::to_string(score), std::move(member)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZRange(std::string key, int64_t start, int64_t stop,
+                                      bool with_scores, AsyncCbStrVec cb)
+{
+    if (with_scores)
+        PostCommand({"ZRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES"},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+    else
+        PostCommand({"ZRANGE", std::move(key), std::to_string(start), std::to_string(stop)},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+}
+
+void RedisConnection::AsyncZRevRange(std::string key, int64_t start, int64_t stop,
+                                         bool with_scores, AsyncCbStrVec cb)
+{
+    if (with_scores)
+        PostCommand({"ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES"},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+    else
+        PostCommand({"ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop)},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+}
+
+void RedisConnection::AsyncZCard(std::string key, AsyncCbInt cb)
+{
+    PostCommand({"ZCARD", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZRem(std::string key, std::string member, AsyncCbInt cb)
+{
+    PostCommand({"ZREM", std::move(key), std::move(member)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZScore(std::string key, std::string member, AsyncCbDouble cb)
+{
+    PostCommand({"ZSCORE", std::move(key), std::move(member)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), -1.0); return; }
+                    cb(RedisError{}, ToDouble(v));
+                });
+}
+
+void RedisConnection::AsyncZRank(std::string key, std::string member, AsyncCbInt cb)
+{
+    PostCommand({"ZRANK", std::move(key), std::move(member)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), -1); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZRevRank(std::string key, std::string member, AsyncCbInt cb)
+{
+    PostCommand({"ZREVRANK", std::move(key), std::move(member)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), -1); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZCount(std::string key, double min, double max, AsyncCbInt cb)
+{
+    PostCommand({"ZCOUNT", std::move(key), std::to_string(min), std::to_string(max)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZIncrBy(std::string key, std::string member, double delta, AsyncCbDouble cb)
+{
+    PostCommand({"ZINCRBY", std::move(key), std::to_string(delta), std::move(member)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0.0); return; }
+                    cb(RedisError{}, ToDouble(v));
+                });
+}
+
+void RedisConnection::AsyncZRangeByScore(std::string key, double min, double max,
+                                             bool with_scores, AsyncCbStrVec cb)
+{
+    if (with_scores)
+        PostCommand({"ZRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max), "WITHSCORES"},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+    else
+        PostCommand({"ZRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max)},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+}
+
+void RedisConnection::AsyncZRevRangeByScore(std::string key, double min, double max,
+                                                bool with_scores, AsyncCbStrVec cb)
+{
+    if (with_scores)
+        PostCommand({"ZREVRANGEBYSCORE", std::move(key), std::to_string(max), std::to_string(min), "WITHSCORES"},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+    else
+        PostCommand({"ZREVRANGEBYSCORE", std::move(key), std::to_string(max), std::to_string(min)},
+                    [cb = std::move(cb)](RedisValue v) {
+                        if (v.is_error()) { cb(v.err(), {}); return; }
+                        cb(RedisError{}, ToStrArray(v));
+                    });
+}
+
+void RedisConnection::AsyncZRemRangeByRank(std::string key, int64_t start, int64_t stop, AsyncCbInt cb)
+{
+    PostCommand({"ZREMRANGEBYRANK", std::move(key), std::to_string(start), std::to_string(stop)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZRemRangeByScore(std::string key, double min, double max, AsyncCbInt cb)
+{
+    PostCommand({"ZREMRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), 0); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncZRangeWithScores(std::string key, int64_t start, int64_t stop, AsyncCbPairs cb)
+{
+    PostCommand({"ZRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES"},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToPairs(v));
+                });
+}
+
+void RedisConnection::AsyncZRevRangeWithScores(std::string key, int64_t start, int64_t stop, AsyncCbPairs cb)
+{
+    PostCommand({"ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES"},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), {}); return; }
+                    cb(RedisError{}, ToPairs(v));
+                });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// Key 管理 — 异步回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::AsyncExpire(std::string key, int64_t seconds, AsyncCbBool cb)
+{
+    PostCommand({"EXPIRE", std::move(key), std::to_string(seconds)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), false); return; }
+                    cb(RedisError{}, ToInt(v) > 0);
+                });
+}
+
+void RedisConnection::AsyncTTL(std::string key, AsyncCbInt cb)
+{
+    PostCommand({"TTL", std::move(key)},
+                [cb = std::move(cb)](RedisValue v) {
+                    if (v.is_error()) { cb(v.err(), -2); return; }
+                    cb(RedisError{}, ToInt(v));
+                });
+}
+
+void RedisConnection::AsyncPing(AsyncCbBool cb)
+{
+    PostCommand({"PING"},
+                [cb = std::move(cb)](RedisValue v) {
+                    cb(v.is_error() ? v.err() : RedisError{}, !v.is_error());
+                });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 泛型命令 — 异步回调
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::AsyncCall(const std::string& cmd,
+                                    const std::vector<std::string>& args,
+                                    AsyncCbGeneric cb)
+{
+    std::vector<std::string> argv;
+    argv.reserve(1 + args.size());
+    argv.push_back(cmd);
+    for (const auto& a : args)
+        argv.push_back(a);
+    PostCommand(std::move(argv),
+                [cb = std::move(cb)](RedisValue v) {
+                    cb(v.is_error() ? v.err() : RedisError{}, std::move(v));
+                });
+}
+
+void RedisConnection::AsyncEval(const std::string& script,
+                                    const std::vector<std::string>& keys,
+                                    const std::vector<std::string>& args,
+                                    AsyncCbGeneric cb)
+{
+    std::vector<std::string> eval_args;
+    eval_args.reserve(2 + keys.size() + args.size());
+    eval_args.push_back(script);
+    eval_args.push_back(std::to_string(keys.size()));
+    for (const auto& k : keys)
+        eval_args.push_back(k);
+    for (const auto& a : args)
+        eval_args.push_back(a);
+    AsyncCall("EVAL", eval_args, std::move(cb));
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 协程辅助
+// ════════════════════════════════════════════════════════════════════════
 
 async_simple::coro::Lazy<bool> RedisConnection::CbToLazyBool(
     std::function<void(AsyncCb)> invoker)
 {
     async_simple::Promise<bool> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec) mutable {
-        promise.setValue(!ec);
+    invoker([promise = std::move(promise)](RedisError err) mutable {
+        promise.setValue(!err);
     });
     co_return co_await std::move(future);
 }
@@ -175,7 +654,7 @@ async_simple::coro::Lazy<std::string> RedisConnection::CbToLazyStr(
 {
     async_simple::Promise<std::string> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec, std::string val) mutable {
+    invoker([promise = std::move(promise)](RedisError err, std::string val) mutable {
         promise.setValue(std::move(val));
     });
     co_return co_await std::move(future);
@@ -186,7 +665,7 @@ async_simple::coro::Lazy<int64_t> RedisConnection::CbToLazyInt(
 {
     async_simple::Promise<int64_t> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec, int64_t val) mutable {
+    invoker([promise = std::move(promise)](RedisError err, int64_t val) mutable {
         promise.setValue(val);
     });
     co_return co_await std::move(future);
@@ -197,7 +676,7 @@ async_simple::coro::Lazy<double> RedisConnection::CbToLazyDouble(
 {
     async_simple::Promise<double> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec, double val) mutable {
+    invoker([promise = std::move(promise)](RedisError err, double val) mutable {
         promise.setValue(val);
     });
     co_return co_await std::move(future);
@@ -208,7 +687,7 @@ async_simple::coro::Lazy<bool> RedisConnection::CbToLazyBoolCb(
 {
     async_simple::Promise<bool> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec, bool val) mutable {
+    invoker([promise = std::move(promise)](RedisError err, bool val) mutable {
         promise.setValue(val);
     });
     co_return co_await std::move(future);
@@ -219,7 +698,7 @@ async_simple::coro::Lazy<std::vector<std::string>> RedisConnection::CbToLazyStrV
 {
     async_simple::Promise<std::vector<std::string>> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec, std::vector<std::string> val) mutable {
+    invoker([promise = std::move(promise)](RedisError err, std::vector<std::string> val) mutable {
         promise.setValue(std::move(val));
     });
     co_return co_await std::move(future);
@@ -230,681 +709,15 @@ async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> RedisConne
 {
     async_simple::Promise<std::vector<std::pair<std::string, double>>> promise;
     auto future = promise.getFuture();
-    invoker([promise = std::move(promise)](boost::system::error_code ec, std::vector<std::pair<std::string, double>> val) mutable {
+    invoker([promise = std::move(promise)](RedisError err, std::vector<std::pair<std::string, double>> val) mutable {
         promise.setValue(std::move(val));
     });
     co_return co_await std::move(future);
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
-// KV — 异步回调
-// ═════════════════════════════════════════════════════════════════════════════
-
-void RedisConnection::AsyncSet(std::string key, std::string value, AsyncCb cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::string>>();
-    req->push("SET", std::move(key), std::move(value));
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb)](boost::system::error_code ec, auto) { cb(std::move(ec)); });
-}
-
-void RedisConnection::AsyncSetEx(std::string key, std::string value,
-                                 int64_t ttl_seconds, AsyncCb cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::string>>();
-    req->push("SETEX", std::move(key), std::to_string(ttl_seconds), std::move(value));
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb)](boost::system::error_code ec, auto) { cb(std::move(ec)); });
-}
-
-void RedisConnection::AsyncGet(std::string key, AsyncCbStr cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("GET", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::string val;
-                  ExtractOptionalValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncDel(std::string key, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("DEL", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncExists(std::string key, AsyncCbBool cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("EXISTS", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, false); return; }
-                  long long val{};
-                  cb(ec, ExtractValue(std::get<0>(*resp_ptr), val) && val > 0);
-              });
-}
-
-void RedisConnection::AsyncIncr(std::string key, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("INCR", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncIncrBy(std::string key, int64_t delta, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("INCRBY", std::move(key), std::to_string(delta));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Hash — 异步回调
-// ═════════════════════════════════════════════════════════════════════════════
-
-void RedisConnection::AsyncHSet(std::string key, std::string field,
-                                std::string value, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("HSET", std::move(key), std::move(field), std::move(value));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncHGet(std::string key, std::string field, AsyncCbStr cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("HGET", std::move(key), std::move(field));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::string val;
-                  ExtractOptionalValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncHDel(std::string key, std::string field, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("HDEL", std::move(key), std::move(field));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncHKeys(std::string key, AsyncCbStrVec cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    req->push("HKEYS", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncHVals(std::string key, AsyncCbStrVec cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    req->push("HVALS", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncHLen(std::string key, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("HLEN", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// List — 异步回调
-// ═════════════════════════════════════════════════════════════════════════════
-
-void RedisConnection::AsyncLPush(std::string key, std::string value, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("LPUSH", std::move(key), std::move(value));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncRPush(std::string key, std::string value, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("RPUSH", std::move(key), std::move(value));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncLPop(std::string key, AsyncCbStr cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("LPOP", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::string val;
-                  ExtractOptionalValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncRPop(std::string key, AsyncCbStr cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("RPOP", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::string val;
-                  ExtractOptionalValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncLLen(std::string key, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("LLEN", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Sorted Set — 异步回调
-// ═════════════════════════════════════════════════════════════════════════════
-
-void RedisConnection::AsyncZAdd(std::string key, double score,
-                                std::string member, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("ZADD", std::move(key), std::to_string(score), std::move(member));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncZRange(std::string key, int64_t start, int64_t stop,
-                                  bool with_scores, AsyncCbStrVec cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    if (with_scores)
-        req->push("ZRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES");
-    else
-        req->push("ZRANGE", std::move(key), std::to_string(start), std::to_string(stop));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncZRevRange(std::string key, int64_t start, int64_t stop,
-                                     bool with_scores, AsyncCbStrVec cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    if (with_scores)
-        req->push("ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES");
-    else
-        req->push("ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncZCard(std::string key, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("ZCARD", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncZRem(std::string key, std::string member, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("ZREM", std::move(key), std::move(member));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncZScore(std::string key, std::string member, AsyncCbDouble cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("ZSCORE", std::move(key), std::move(member));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, -1.0); return; }
-                  std::string val;
-                  if (ExtractOptionalValue(std::get<0>(*resp_ptr), val))
-                      cb(ec, std::stod(val));
-                  else
-                      cb(ec, -1.0);
-              });
-}
-
-void RedisConnection::AsyncZRank(std::string key, std::string member, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("ZRANK", std::move(key), std::move(member));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, -1); return; }
-                  std::string val;
-                  if (ExtractOptionalValue(std::get<0>(*resp_ptr), val))
-                      cb(ec, static_cast<int64_t>(std::stoll(val)));
-                  else
-                      cb(ec, -1);
-              });
-}
-
-void RedisConnection::AsyncZRevRank(std::string key, std::string member, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::optional<std::string>>>();
-    req->push("ZREVRANK", std::move(key), std::move(member));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, -1); return; }
-                  std::string val;
-                  if (ExtractOptionalValue(std::get<0>(*resp_ptr), val))
-                      cb(ec, static_cast<int64_t>(std::stoll(val)));
-                  else
-                      cb(ec, -1);
-              });
-}
-
-void RedisConnection::AsyncZCount(std::string key, double min, double max, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("ZCOUNT", std::move(key), std::to_string(min), std::to_string(max));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncZIncrBy(std::string key, std::string member, double delta, AsyncCbDouble cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::string>>();
-    req->push("ZINCRBY", std::move(key), std::to_string(delta), std::move(member));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0.0); return; }
-                  std::string val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::stod(val));
-              });
-}
-
-void RedisConnection::AsyncZRangeByScore(std::string key, double min, double max,
-                                         bool with_scores, AsyncCbStrVec cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    if (with_scores)
-        req->push("ZRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max), "WITHSCORES");
-    else
-        req->push("ZRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncZRevRangeByScore(std::string key, double min, double max,
-                                            bool with_scores, AsyncCbStrVec cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    if (with_scores)
-        req->push("ZREVRANGEBYSCORE", std::move(key), std::to_string(max), std::to_string(min), "WITHSCORES");
-    else
-        req->push("ZREVRANGEBYSCORE", std::move(key), std::to_string(max), std::to_string(min));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> val;
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, std::move(val));
-              });
-}
-
-void RedisConnection::AsyncZRemRangeByRank(std::string key, int64_t start, int64_t stop, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("ZREMRANGEBYRANK", std::move(key), std::to_string(start), std::to_string(stop));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncZRemRangeByScore(std::string key, double min, double max, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("ZREMRANGEBYSCORE", std::move(key), std::to_string(min), std::to_string(max));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, 0); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncZRangeWithScores(std::string key, int64_t start, int64_t stop,
-                                            AsyncCbPairs cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    req->push("ZRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES");
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> flat;
-                  ExtractValue(std::get<0>(*resp_ptr), flat);
-                  std::vector<std::pair<std::string, double>> pairs;
-                  pairs.reserve(flat.size() / 2);
-                  for (size_t i = 0; i + 1 < flat.size(); i += 2)
-                      pairs.emplace_back(std::move(flat[i]), std::stod(flat[i + 1]));
-                  cb(ec, std::move(pairs));
-              });
-}
-
-void RedisConnection::AsyncZRevRangeWithScores(std::string key, int64_t start, int64_t stop,
-                                               AsyncCbPairs cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::vector<std::string>>>();
-    req->push("ZREVRANGE", std::move(key), std::to_string(start), std::to_string(stop), "WITHSCORES");
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, {}); return; }
-                  std::vector<std::string> flat;
-                  ExtractValue(std::get<0>(*resp_ptr), flat);
-                  std::vector<std::pair<std::string, double>> pairs;
-                  pairs.reserve(flat.size() / 2);
-                  for (size_t i = 0; i + 1 < flat.size(); i += 2)
-                      pairs.emplace_back(std::move(flat[i]), std::stod(flat[i + 1]));
-                  cb(ec, std::move(pairs));
-              });
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// Key 管理 — 异步回调
-// ═════════════════════════════════════════════════════════════════════════════
-
-void RedisConnection::AsyncExpire(std::string key, int64_t seconds, AsyncCbBool cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("EXPIRE", std::move(key), std::to_string(seconds));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, false); return; }
-                  long long val{};
-                  cb(ec, ExtractValue(std::get<0>(*resp_ptr), val) && val > 0);
-              });
-}
-
-void RedisConnection::AsyncTTL(std::string key, AsyncCbInt cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<long long>>();
-    req->push("TTL", std::move(key));
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec) { cb(ec, -2); return; }
-                  long long val{};
-                  ExtractValue(std::get<0>(*resp_ptr), val);
-                  cb(ec, static_cast<int64_t>(val));
-              });
-}
-
-void RedisConnection::AsyncPing(AsyncCbBool cb)
-{
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<std::string>>();
-    req->push("PING");
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb)](boost::system::error_code ec, auto) {
-                  cb(ec, !ec);
-              });
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
-// 泛型命令 — 异步回调
-// ═════════════════════════════════════════════════════════════════════════════
-
-void RedisConnection::AsyncCall(const std::string& cmd,
-                                const std::vector<std::string>& args,
-                                AsyncCbGeneric cb)
-{
-    using VecResp = std::vector<boost::redis::resp3::node>;
-
-    auto req  = std::make_shared<boost::redis::request>();
-    auto resp = std::make_shared<boost::redis::response<VecResp>>();
-    req->push_range(cmd, args);
-
-    auto resp_ptr = resp;
-    AsyncExec(std::move(req), std::move(resp),
-              [cb = std::move(cb), resp_ptr](boost::system::error_code ec, auto) {
-                  if (ec)
-                  {
-                      cb(ec, {});
-                      return;
-                  }
-                  cb(ec, std::get<0>(*resp_ptr));
-              });
-}
-
-void RedisConnection::AsyncEval(const std::string& script,
-                                const std::vector<std::string>& keys,
-                                const std::vector<std::string>& args,
-                                AsyncCbGeneric cb)
-{
-    std::vector<std::string> eval_args;
-    eval_args.reserve(1 + 1 + keys.size() + args.size());
-    eval_args.push_back(script);
-    eval_args.push_back(std::to_string(keys.size()));
-    eval_args.insert(eval_args.end(), keys.begin(), keys.end());
-    eval_args.insert(eval_args.end(), args.begin(), args.end());
-    AsyncCall("EVAL", eval_args, std::move(cb));
-}
-
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 // KV — 协程接口
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 
 async_simple::coro::Lazy<bool> RedisConnection::CoSet(std::string key, std::string value)
 {
@@ -955,9 +768,9 @@ async_simple::coro::Lazy<int64_t> RedisConnection::CoIncrBy(std::string key, int
     });
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 // Hash — 协程接口
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 
 async_simple::coro::Lazy<int64_t> RedisConnection::CoHSet(std::string key, std::string field, std::string value)
 {
@@ -1001,9 +814,9 @@ async_simple::coro::Lazy<int64_t> RedisConnection::CoHLen(std::string key)
     });
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 // List — 协程接口
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 
 async_simple::coro::Lazy<int64_t> RedisConnection::CoLPush(std::string key, std::string value)
 {
@@ -1040,9 +853,9 @@ async_simple::coro::Lazy<int64_t> RedisConnection::CoLLen(std::string key)
     });
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 // Sorted Set — 协程接口
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 
 async_simple::coro::Lazy<int64_t> RedisConnection::CoZAdd(std::string key, double score, std::string member)
 {
@@ -1162,9 +975,9 @@ async_simple::coro::Lazy<std::vector<std::pair<std::string, double>>> RedisConne
     });
 }
 
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 // Key 管理 — 协程接口
-// ═════════════════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════
 
 async_simple::coro::Lazy<bool> RedisConnection::CoExpire(std::string key, int64_t seconds)
 {
@@ -1185,4 +998,317 @@ async_simple::coro::Lazy<bool> RedisConnection::CoPing()
     co_return co_await CbToLazyBoolCb([this](AsyncCbBool cb) mutable {
         AsyncPing(std::move(cb));
     });
+}
+
+// ════════════════════════════════════════════════════════════════════════
+// 底层基础设施 — hiredis 异步 API + Boost.Asio reactor 适配
+// ════════════════════════════════════════════════════════════════════════
+
+void RedisConnection::PostCommand(std::vector<std::string> argv,
+                                   std::function<void(RedisValue)> on_reply)
+{
+    if (!async_ctx_ || !connected_)
+    {
+        on_reply(RedisValue::MakeError("not connected"));
+        return;
+    }
+
+    pending_cb_ = std::move(on_reply);
+
+    std::vector<const char*> cargv;
+    std::vector<size_t>      argvlen;
+    cargv.reserve(argv.size());
+    argvlen.reserve(argv.size());
+    for (const auto& arg : argv)
+    {
+        cargv.push_back(arg.c_str());
+        argvlen.push_back(arg.size());
+    }
+
+    int rc = redisAsyncCommandArgv(async_ctx_,
+                                      CommandCallback,
+                                      this,
+                                      static_cast<int>(cargv.size()),
+                                      cargv.data(),
+                                      argvlen.data());
+    if (rc != REDIS_OK)
+    {
+        LOG_ERROR("redisAsyncCommandArgv failed: {}", async_ctx_->errstr);
+        pending_cb_ = nullptr;
+    }
+}
+
+void RedisConnection::CommandCallback(redisAsyncContext* ac, void* r, void* privdata)
+{
+    auto* self = static_cast<RedisConnection*>(privdata);
+    if (!self)
+        return;
+
+    if (!r)
+    {
+        self->pending_cb_(RedisValue::MakeError("connection closed"));
+        self->pending_cb_ = nullptr;
+        return;
+    }
+
+    auto* reply = static_cast<redisReply*>(r);
+    RedisValue val = RedisValue::FromReply(reply);
+    self->pending_cb_(std::move(val));
+    self->pending_cb_ = nullptr;
+}
+
+void RedisConnection::StartConnectChain(const std::shared_ptr<ConnectChain>& chain)
+{
+    async_ctx_ = redisAsyncConnect(config_.host.c_str(), config_.port);
+    if (!async_ctx_ || async_ctx_->err)
+    {
+        LOG_ERROR("Redis async connect failed: {}",
+                  async_ctx_ ? async_ctx_->errstr : "unknown error");
+        chain->promise.set_value(false);
+        return;
+    }
+
+    async_ctx_->data = this;
+    redisAsyncSetConnectCallback(async_ctx_, EvConnect);
+    redisAsyncSetDisconnectCallback(async_ctx_, EvDisconnect);
+
+    async_ctx_->ev.addRead  = EvAddRead;
+    async_ctx_->ev.delRead  = EvDelRead;
+    async_ctx_->ev.addWrite = EvAddWrite;
+    async_ctx_->ev.delWrite = EvDelWrite;
+    async_ctx_->ev.cleanup  = EvCleanup;
+    async_ctx_->ev.data     = this;
+
+    int fd = async_ctx_->c.fd;
+    if (fd < 0)
+    {
+        LOG_ERROR("Redis async get fd failed");
+        redisAsyncFree(async_ctx_);
+        async_ctx_ = nullptr;
+        chain->promise.set_value(false);
+        return;
+    }
+
+    ctx_alive_ = true;
+    read_descriptor_.assign(fd);
+    write_descriptor_.assign(fd);
+    OnAddRead();
+}
+
+void RedisConnection::FailConnect()
+{
+    boost::asio::post(io_ctx_, [this]() {
+        if (async_ctx_)
+        {
+            redisAsyncFree(async_ctx_);
+            async_ctx_ = nullptr;
+        }
+        ctx_alive_ = false;
+        connect_state_.reset();
+    });
+}
+
+void RedisConnection::DisconnectInternal()
+{
+    if (async_ctx_)
+    {
+        redisAsyncFree(async_ctx_);
+        async_ctx_ = nullptr;
+    }
+    ctx_alive_ = false;
+    connect_state_.reset();
+    connected_ = false;
+    read_descriptor_.cancel();
+    write_descriptor_.cancel();
+}
+
+// ── hiredis 事件回调（静态 thunk）──
+
+void RedisConnection::EvAddRead(void* privdata)
+{
+    auto* self = static_cast<RedisConnection*>(privdata);
+    if (self)
+        self->OnAddRead();
+}
+
+void RedisConnection::EvDelRead(void* privdata)
+{
+    auto* self = static_cast<RedisConnection*>(privdata);
+    if (self)
+        self->OnDelRead();
+}
+
+void RedisConnection::EvAddWrite(void* privdata)
+{
+    auto* self = static_cast<RedisConnection*>(privdata);
+    if (self)
+        self->OnAddWrite();
+}
+
+void RedisConnection::EvDelWrite(void* privdata)
+{
+    auto* self = static_cast<RedisConnection*>(privdata);
+    if (self)
+        self->OnDelWrite();
+}
+
+void RedisConnection::EvCleanup(void* privdata)
+{
+    auto* self = static_cast<RedisConnection*>(privdata);
+    if (self)
+        self->OnCleanupEv();
+}
+
+void RedisConnection::EvConnect(const redisAsyncContext* ac, int status)
+{
+    auto* self = static_cast<RedisConnection*>(ac->data);
+    if (self)
+        self->OnConnectStatus(ac, status);
+}
+
+void RedisConnection::EvDisconnect(const redisAsyncContext* ac, int status)
+{
+    auto* self = static_cast<RedisConnection*>(ac->data);
+    if (self)
+        self->OnDisconnectStatus(ac, status);
+}
+
+// ── Asio IO 处理器 ──
+
+void RedisConnection::OnAddRead()
+{
+    if (!async_ctx_ || !ctx_alive_)
+        return;
+    read_descriptor_.async_wait(boost::asio::posix::stream_descriptor::wait_read,
+        [this](const boost::system::error_code& ec) {
+            if (!ec)
+            {
+                redisAsyncHandleRead(async_ctx_);
+                OnAddRead();
+            }
+        });
+}
+
+void RedisConnection::OnDelRead()
+{
+    read_descriptor_.cancel();
+}
+
+void RedisConnection::OnAddWrite()
+{
+    if (!async_ctx_ || !ctx_alive_)
+        return;
+    write_descriptor_.async_wait(boost::asio::posix::stream_descriptor::wait_write,
+        [this](const boost::system::error_code& ec) {
+            if (!ec)
+            {
+                redisAsyncHandleWrite(async_ctx_);
+                OnAddWrite();
+            }
+        });
+}
+
+void RedisConnection::OnDelWrite()
+{
+    write_descriptor_.cancel();
+}
+
+void RedisConnection::OnCleanupEv()
+{
+    read_descriptor_.cancel();
+    write_descriptor_.cancel();
+}
+
+void RedisConnection::OnConnectStatus(const redisAsyncContext* ac, int status)
+{
+    if (status != REDIS_OK)
+    {
+        LOG_ERROR("Redis connect failed: {}", ac->errstr);
+        if (connect_state_)
+            connect_state_->promise.set_value(false);
+        return;
+    }
+
+    LOG_INFO("Redis connected: {}:{}", config_.host, config_.port);
+
+    if (connect_state_)
+        OnConnectStep(connect_state_, RedisValue::MakeNil());
+}
+
+void RedisConnection::OnDisconnectStatus(const redisAsyncContext* ac, int status)
+{
+    LOG_WARN("Redis disconnected: {}:{}", config_.host, config_.port);
+    connected_ = false;
+    ctx_alive_ = false;
+    if (connect_state_ && !connect_state_->done.load())
+    {
+        connect_state_->promise.set_value(false);
+        connect_state_->done = true;
+    }
+}
+
+void RedisConnection::OnConnectStep(const std::shared_ptr<ConnectChain>& chain,
+                                     RedisValue v)
+{
+    if (chain->done.load())
+        return;
+
+    switch (chain->step)
+    {
+    case 0:
+        PostCommand({"PING"}, [chain, this](RedisValue r) {
+            if (r.is_error())
+            {
+                chain->promise.set_value(false);
+                chain->done = true;
+                return;
+            }
+            chain->step = 1;
+            OnConnectStep(chain, std::move(r));
+        });
+        break;
+
+    case 1:
+        PostCommand({"HELLO", "3"}, [chain, this](RedisValue r) {
+            if (r.is_error())
+            {
+                chain->step = 2;
+                OnConnectStep(chain, std::move(r));
+                return;
+            }
+            chain->step = 2;
+            OnConnectStep(chain, std::move(r));
+        });
+        break;
+
+    case 2:
+        if (config_.db_index > 0)
+        {
+            PostCommand({"SELECT", std::to_string(config_.db_index)},
+                        [chain, this](RedisValue r) {
+                            if (r.is_error())
+                            {
+                                chain->promise.set_value(false);
+                                chain->done = true;
+                                return;
+                            }
+                            chain->promise.set_value(true);
+                            chain->done = true;
+                            connected_ = true;
+                        });
+        }
+        else
+        {
+            chain->promise.set_value(true);
+            chain->done = true;
+            connected_ = true;
+        }
+        break;
+
+    default:
+        chain->promise.set_value(true);
+        chain->done = true;
+        connected_ = true;
+        break;
+    }
 }

@@ -26,6 +26,7 @@ class GBServer(ConanFile):
         self.requires("pugixml/1.16")
         self.requires("sol2/3.5.0")
         self.requires("cxxopts/3.3.1")
+        self.requires("hiredis/1.3.0")
         self.requires("libpq/17.7")
         self.requires("catch2/3.15.0")
         self.requires("cnats/3.12.0")

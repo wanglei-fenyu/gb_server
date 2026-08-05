@@ -42,6 +42,7 @@ macro(conan_link_libraries target_name)
         kcp::kcp
         PostgreSQL::PostgreSQL
         cnats::nats_static
+        hiredis::hiredis
     )
 
 endmacro()

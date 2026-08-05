@@ -11,9 +11,23 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
+#include <boost/asio/io_context.hpp>
+#include <boost/asio/post.hpp>
+#include <boost/asio/executor_work_guard.hpp>
 
 // ── 创建默认 Redis 连接 ──
-static bool CreateConnection(RedisConnection& conn)
+struct IoEnv {
+    boost::asio::io_context                                        io_ctx;
+    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> guard;
+    std::thread                                                    thread;
+
+    IoEnv() : guard(boost::asio::make_work_guard(io_ctx))
+            , thread([this]() { io_ctx.run(); }) {}
+
+    ~IoEnv() { guard.reset(); if (thread.joinable()) thread.join(); }
+};
+
+static bool CreateConnection(RedisConnection& conn, boost::asio::io_context& io_ctx)
 {
     RedisConfig cfg;
     cfg.host     = "192.168.31.186";
@@ -54,12 +68,13 @@ static T WaitValue(const std::function<void(std::function<void(T)>)>& setup)
 int MenuTestRedisPing()
 {
     TestSection("Redis — Ping");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
 
     bool pong = WaitValue<bool>([&](auto cb) {
-        conn.AsyncPing([&, cb = std::move(cb)](boost::system::error_code ec, bool ok) mutable {
-            cb(!ec && ok);
+        conn.AsyncPing([&, cb = std::move(cb)](RedisError ec, bool ok) mutable {
+            cb(ec.ok() && ok);
             conn.Disconnect();
         });
     });
@@ -71,8 +86,9 @@ int MenuTestRedisPing()
 int MenuTestRedisKV()
 {
     TestSection("Redis — KV Operations (细粒度)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // ── Clean up at START (not end) — data stays after test ──
@@ -149,8 +165,9 @@ int MenuTestRedisKV()
 int MenuTestRedisHash()
 {
     TestSection("Redis — Hash Operations (细粒度)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -203,8 +220,9 @@ int MenuTestRedisHash()
 int MenuTestRedisList()
 {
     TestSection("Redis — List Operations (细粒度)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -245,8 +263,9 @@ int MenuTestRedisList()
 int MenuTestRedisZSet()
 {
     TestSection("Redis — Sorted Set Operations (细粒度)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -303,8 +322,9 @@ int MenuTestRedisZSet()
 int MenuTestRedisZSetRange()
 {
     TestSection("Redis — ZSET Range with Score Verification");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -406,13 +426,12 @@ int MenuTestRedisZSetRange()
     {
         int count = WaitValue<int>([&](auto cb) {
             conn.AsyncCall("ZCOUNT", {"db:zset_range", "10", "20"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    if (!ec && resp.has_value()) {
-                        const auto& nodes = resp.value();
-                        if (!nodes.empty() &&
-                            nodes[0].data_type == boost::redis::resp3::type::number)
-                            cb(std::stoi(nodes[0].value));
+                    if (ec.ok() && resp.has_value()) {
+                        
+                        if (resp.is_int())
+                            cb(resp.as_int());
                         else cb(-1);
                     } else cb(-1);
                 });
@@ -426,13 +445,12 @@ int MenuTestRedisZSetRange()
     {
         int count = WaitValue<int>([&](auto cb) {
             conn.AsyncCall("ZCOUNT", {"db:zset_range", "-inf", "10"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    if (!ec && resp.has_value()) {
-                        const auto& nodes = resp.value();
-                        if (!nodes.empty() &&
-                            nodes[0].data_type == boost::redis::resp3::type::number)
-                            cb(std::stoi(nodes[0].value));
+                    if (ec.ok() && resp.has_value()) {
+                        
+                        if (resp.is_int())
+                            cb(resp.as_int());
                         else cb(-1);
                     } else cb(-1);
                 });
@@ -463,8 +481,9 @@ int MenuTestRedisZSetRange()
 int MenuTestRedisZSetAdv()
 {
     TestSection("Redis — ZSET Advanced Operations (Co*)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -653,39 +672,22 @@ int MenuTestRedisZSetAdv()
 // 新增: Lua 脚本测试
 // ══════════════════════════════════════════════════════════════════════
 
-// 辅助：从 GenericResponse 提取字符串值
+// 辅助：从 RedisValue 提取字符串值
 static std::string ExtractGenericString(const RedisConnection::GenericResponse& resp)
 {
     if (!resp.has_value()) return {};
-    const auto& nodes = resp.value();
-    if (nodes.empty()) return {};
-    const auto& n0 = nodes[0];
-    // Lua script returns: simple_string for "OK", blob_string for bulk values,
-    // number for integers, null for nil
-    // Lua EVAL may return verbatim_string (RESP3) for string values
-    if (n0.data_type == boost::redis::resp3::type::simple_string ||
-        n0.data_type == boost::redis::resp3::type::blob_string ||
-        n0.data_type == boost::redis::resp3::type::verbatim_string ||
-        n0.data_type == boost::redis::resp3::type::number ||
-        n0.data_type == boost::redis::resp3::type::big_number)
-        return n0.value;
+    if (resp.is_str()) return resp.as_str();
+    if (resp.is_int()) return std::to_string(resp.as_int());
     return {};
 }
 
-// 辅助：从 GenericResponse 提取整数
+// 辅助：从 RedisValue 提取整数
 static int64_t ExtractGenericInt(const RedisConnection::GenericResponse& resp)
 {
     if (!resp.has_value()) return -1;
-    const auto& nodes = resp.value();
-    if (nodes.empty()) return -2;
-    const auto& n0 = nodes[0];
-    if (n0.data_type == boost::redis::resp3::type::number ||
-        n0.data_type == boost::redis::resp3::type::big_number)
-        return std::stoll(n0.value);
-    // For simple_string returns that look like numbers
-    if (n0.data_type == boost::redis::resp3::type::simple_string)
-    {
-        try { return std::stoll(n0.value); } catch (...) { return -3; }
+    if (resp.is_int()) return resp.as_int();
+    if (resp.is_str()) {
+        try { return std::stoll(resp.as_str()); } catch (...) { return -3; }
     }
     return -3;
 }
@@ -693,17 +695,15 @@ static int64_t ExtractGenericInt(const RedisConnection::GenericResponse& resp)
 // 辅助：检查是否为 nil/null 响应
 static bool IsGenericNil(const RedisConnection::GenericResponse& resp)
 {
-    if (!resp.has_value()) return true;
-    const auto& nodes = resp.value();
-    if (nodes.empty()) return true;
-    return nodes[0].data_type == boost::redis::resp3::type::null;
+    return !resp.has_value() || resp.is_nil();
 }
 
 int MenuTestRedisLuaScript()
 {
     TestSection("Redis — Lua Script (redis.call)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -717,9 +717,9 @@ int MenuTestRedisLuaScript()
             conn.AsyncEval(
                 "return redis.call('SET', KEYS[1], ARGV[1])",
                 {"db:lua_kv"}, {"hello_from_lua"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "ERR:" + ec.message());
+                    cb(ec.ok() ? ExtractGenericString(resp) : "ERR:" + ec.message);
                 });
         });
         TestResult("Lua SET db:lua_kv = hello_from_lua", v == "OK",
@@ -733,9 +733,9 @@ int MenuTestRedisLuaScript()
             conn.AsyncEval(
                 "return redis.call('GET', KEYS[1])",
                 {"db:lua_kv"}, {},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         TestResult("Lua GET db:lua_kv", v == "hello_from_lua",
@@ -749,9 +749,9 @@ int MenuTestRedisLuaScript()
             conn.AsyncEval(
                 "return redis.call('GET', KEYS[1])",
                 {"db:lua_nonexist"}, {},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec && IsGenericNil(resp));
+                    cb(ec.ok() && IsGenericNil(resp));
                 });
         });
         TestResult("Lua GET non-existent (nil)", is_nil, is_nil ? "nil" : "unexpected value");
@@ -766,9 +766,9 @@ int MenuTestRedisLuaScript()
                 "redis.call('EXPIRE', KEYS[1], ARGV[2])\n"
                 "return redis.call('GET', KEYS[1])",
                 {"db:lua_kv"}, {"multi_cmd_test", "3600"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         TestResult("Lua multi: SET+EXPIRE+GET", v == "multi_cmd_test",
@@ -786,9 +786,9 @@ int MenuTestRedisLuaScript()
                 "  return 'notfound'\n"
                 "end",
                 {"db:lua_kv"}, {},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         TestResult("Lua EXISTS condition (db:lua_kv)", v == "exists",
@@ -806,9 +806,9 @@ int MenuTestRedisLuaScript()
                 "  return 'notfound'\n"
                 "end",
                 {"db:lua_nonexist"}, {},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         TestResult("Lua EXISTS condition (non-existent)", v == "notfound",
@@ -824,9 +824,9 @@ int MenuTestRedisLuaScript()
                 "redis.call('ZADD', KEYS[1], ARGV[3], ARGV[4])\n"
                 "return redis.call('ZCARD', KEYS[1])",
                 {"db:lua_zset"}, {"15.0", "lua_m1", "25.0", "lua_m2"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericInt(resp) : 0);
+                    cb(ec.ok() ? ExtractGenericInt(resp) : 0);
                 });
         });
         TestResult("Lua ZADD 2 members + ZCARD", n == 2, "cnt=" + std::to_string(n));
@@ -843,9 +843,9 @@ int MenuTestRedisLuaScript()
                 "end\n"
                 "return ''",
                 {"db:lua_zset"}, {},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         TestResult("Lua ZRANGE first member=score", v == "lua_m1=15" || v == "lua_m2=25",
@@ -861,9 +861,9 @@ int MenuTestRedisLuaScript()
                 "local b = tonumber(ARGV[2])\n"
                 "return tostring(a + b)",
                 {}, {"40", "2"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         TestResult("Lua arithmetic (40+2)", v == "42", "got=\"" + v + "\"");
@@ -878,9 +878,9 @@ int MenuTestRedisLuaScript()
                 "local ex = redis.call('EXISTS', KEYS[1])\n"
                 "if ex == 0 then return 'deleted' else return 'still_exists' end",
                 {"db:lua_counter"}, {},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    cb(!ec ? ExtractGenericString(resp) : "");
+                    cb(ec.ok() ? ExtractGenericString(resp) : "");
                 });
         });
         // db:lua_counter doesn't exist, DEL returns 0, EXISTS returns 0
@@ -905,8 +905,9 @@ int MenuTestRedisLuaScript()
 int MenuTestRedisExpire()
 {
     TestSection("Redis — Expire / TTL");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -931,8 +932,9 @@ int MenuTestRedisExpire()
 int MenuTestRedisAsyncCallback()
 {
     TestSection("Redis — Async Callback API (细粒度)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -947,8 +949,8 @@ int MenuTestRedisAsyncCallback()
     {
         bool ok = WaitValue<bool>([&](auto cb) {
             conn.AsyncSet("db:acb", "acb_val",
-                [cb = std::move(cb)](boost::system::error_code ec) mutable {
-                    cb(!ec);
+                [cb = std::move(cb)](RedisError ec) mutable {
+                    cb(ec.ok());
                 });
         });
         TestResult("AsyncSet db:acb = acb_val", ok);
@@ -956,7 +958,7 @@ int MenuTestRedisAsyncCallback()
 
         std::string v = WaitValue<std::string>([&](auto cb) {
             conn.AsyncGet("db:acb",
-                [cb = std::move(cb)](boost::system::error_code ec, std::string val) mutable {
+                [cb = std::move(cb)](RedisError ec, std::string val) mutable {
                     cb(ec ? "" : std::move(val));
                 });
         });
@@ -965,7 +967,7 @@ int MenuTestRedisAsyncCallback()
 
         int64_t n = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncDel("db:acb",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? 0 : n);
                 });
         });
@@ -977,7 +979,7 @@ int MenuTestRedisAsyncCallback()
     {
         int64_t n = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncHSet("db:acb_h", "f1", "v1",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? 0 : n);
                 });
         });
@@ -986,7 +988,7 @@ int MenuTestRedisAsyncCallback()
 
         std::string v = WaitValue<std::string>([&](auto cb) {
             conn.AsyncHGet("db:acb_h", "f1",
-                [cb = std::move(cb)](boost::system::error_code ec, std::string val) mutable {
+                [cb = std::move(cb)](RedisError ec, std::string val) mutable {
                     cb(ec ? "" : std::move(val));
                 });
         });
@@ -995,7 +997,7 @@ int MenuTestRedisAsyncCallback()
 
         int64_t d = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncHDel("db:acb_h", "f1",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? 0 : n);
                 });
         });
@@ -1007,7 +1009,7 @@ int MenuTestRedisAsyncCallback()
     {
         int64_t n = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncLPush("db:acb_l", "li",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? 0 : n);
                 });
         });
@@ -1016,7 +1018,7 @@ int MenuTestRedisAsyncCallback()
 
         std::string v = WaitValue<std::string>([&](auto cb) {
             conn.AsyncLPop("db:acb_l",
-                [cb = std::move(cb)](boost::system::error_code ec, std::string val) mutable {
+                [cb = std::move(cb)](RedisError ec, std::string val) mutable {
                     cb(ec ? "" : std::move(val));
                 });
         });
@@ -1028,7 +1030,7 @@ int MenuTestRedisAsyncCallback()
     {
         int64_t n = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncZAdd("db:acb_z", 77.7, "zm",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? 0 : n);
                 });
         });
@@ -1037,7 +1039,7 @@ int MenuTestRedisAsyncCallback()
 
         double s = WaitValue<double>([&](auto cb) {
             conn.AsyncZScore("db:acb_z", "zm",
-                [cb = std::move(cb)](boost::system::error_code ec, double s) mutable {
+                [cb = std::move(cb)](RedisError ec, double s) mutable {
                     cb(ec ? -1.0 : s);
                 });
         });
@@ -1056,13 +1058,13 @@ int MenuTestRedisAsyncCallback()
 
         int64_t rr_a = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncZRevRank("db:acb_z2", "a",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t rank) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t rank) mutable {
                     cb(ec ? -1 : rank);
                 });
         });
         int64_t rr_d = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncZRevRank("db:acb_z2", "d",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t rank) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t rank) mutable {
                     cb(ec ? -1 : rank);
                 });
         });
@@ -1080,7 +1082,7 @@ int MenuTestRedisAsyncCallback()
 
         double new_score = WaitValue<double>([&](auto cb) {
             conn.AsyncZIncrBy("db:acb_z3", "x", 5.0,
-                [cb = std::move(cb)](boost::system::error_code ec, double score) mutable {
+                [cb = std::move(cb)](RedisError ec, double score) mutable {
                     cb(ec ? -1.0 : score);
                 });
         });
@@ -1099,7 +1101,7 @@ int MenuTestRedisAsyncCallback()
         // AsyncZRange with_scores=true → flat vector [member, score_str, member, score_str, ...]
         auto v1 = WaitValue<std::vector<std::string>>([&](auto cb) {
             conn.AsyncZRange("db:acb_z4", 0, -1, true,
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      std::vector<std::string> data) mutable {
                     cb(ec ? std::vector<std::string>{} : std::move(data));
                 });
@@ -1112,7 +1114,7 @@ int MenuTestRedisAsyncCallback()
         // AsyncZRevRange with_scores=true
         auto v2 = WaitValue<std::vector<std::string>>([&](auto cb) {
             conn.AsyncZRevRange("db:acb_z4", 0, -1, true,
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      std::vector<std::string> data) mutable {
                     cb(ec ? std::vector<std::string>{} : std::move(data));
                 });
@@ -1132,7 +1134,7 @@ int MenuTestRedisAsyncCallback()
 
         auto pairs = WaitValue<std::vector<std::pair<std::string, double>>>([&](auto cb) {
             conn.AsyncZRangeWithScores("db:acb_z5", 0, -1,
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      std::vector<std::pair<std::string, double>> res) mutable {
                     cb(ec ? std::vector<std::pair<std::string, double>>{} : std::move(res));
                 });
@@ -1144,7 +1146,7 @@ int MenuTestRedisAsyncCallback()
 
         auto rpairs = WaitValue<std::vector<std::pair<std::string, double>>>([&](auto cb) {
             conn.AsyncZRevRangeWithScores("db:acb_z5", 0, -1,
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      std::vector<std::pair<std::string, double>> res) mutable {
                     cb(ec ? std::vector<std::pair<std::string, double>>{} : std::move(res));
                 });
@@ -1165,7 +1167,7 @@ int MenuTestRedisAsyncCallback()
 
         auto members = WaitValue<std::vector<std::string>>([&](auto cb) {
             conn.AsyncZRangeByScore("db:acb_z6", 10.0, 20.0, false,
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      std::vector<std::string> members) mutable {
                     cb(ec ? std::vector<std::string>{} : std::move(members));
                 });
@@ -1176,7 +1178,7 @@ int MenuTestRedisAsyncCallback()
 
         auto rmembers = WaitValue<std::vector<std::string>>([&](auto cb) {
             conn.AsyncZRevRangeByScore("db:acb_z6", 20.0, 10.0, false,
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      std::vector<std::string> members) mutable {
                     cb(ec ? std::vector<std::string>{} : std::move(members));
                 });
@@ -1188,7 +1190,7 @@ int MenuTestRedisAsyncCallback()
         // AsyncZRemRangeByRank
         int64_t removed = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncZRemRangeByRank("db:acb_z6", 0, 0,
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? -1 : n);
                 });
         });
@@ -1199,7 +1201,7 @@ int MenuTestRedisAsyncCallback()
         // AsyncZRemRangeByScore - remove remaining
         removed = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncZRemRangeByScore("db:acb_z6", 20.0, 30.0,
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? -1 : n);
                 });
         });
@@ -1218,7 +1220,7 @@ int MenuTestRedisAsyncCallback()
 
         int64_t cnt = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncZCount("db:acb_z7", 10.0, 20.0,
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t n) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t n) mutable {
                     cb(ec ? -1 : n);
                 });
         });
@@ -1235,8 +1237,8 @@ int MenuTestRedisAsyncCallback()
 
         bool ok = WaitValue<bool>([&](auto cb) {
             conn.AsyncExpire("db:acb_exp", 3600,
-                [cb = std::move(cb)](boost::system::error_code ec, bool ok) mutable {
-                    cb(!ec && ok);
+                [cb = std::move(cb)](RedisError ec, bool ok) mutable {
+                    cb(ec.ok() && ok);
                 });
         });
         TestResult("AsyncExpire 3600", ok);
@@ -1244,7 +1246,7 @@ int MenuTestRedisAsyncCallback()
 
         int64_t ttl = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncTTL("db:acb_exp",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t t) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t t) mutable {
                     cb(ec ? -2 : t);
                 });
         });
@@ -1256,7 +1258,7 @@ int MenuTestRedisAsyncCallback()
     {
         int64_t v = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncIncr("db:acb_incr",
-                [cb = std::move(cb)](boost::system::error_code ec, int64_t v) mutable {
+                [cb = std::move(cb)](RedisError ec, int64_t v) mutable {
                     cb(ec ? -1 : v);
                 });
         });
@@ -1265,8 +1267,8 @@ int MenuTestRedisAsyncCallback()
 
         bool ex = WaitValue<bool>([&](auto cb) {
             conn.AsyncExists("db:acb_incr",
-                [cb = std::move(cb)](boost::system::error_code ec, bool ex) mutable {
-                    cb(!ec && ex);
+                [cb = std::move(cb)](RedisError ec, bool ex) mutable {
+                    cb(ec.ok() && ex);
                 });
         });
         TestResult("AsyncExists db:acb_incr", ex);
@@ -1285,8 +1287,9 @@ int MenuTestRedisAsyncCallback()
 int MenuTestRedisAsyncCallEval()
 {
     TestSection("Redis — AsyncCall / AsyncEval");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up at START
@@ -1297,8 +1300,8 @@ int MenuTestRedisAsyncCallEval()
     {
         bool ok = WaitValue<bool>([&](auto cb) {
             conn.AsyncCall("SET", {"db:acall", "acall_v"},
-                [cb = std::move(cb)](boost::system::error_code ec, auto&&) mutable {
-                    cb(!ec);
+                [cb = std::move(cb)](RedisError ec, auto&&) mutable {
+                    cb(ec.ok());
                 });
         });
         TestResult("AsyncCall SET db:acall", ok);
@@ -1309,12 +1312,12 @@ int MenuTestRedisAsyncCallEval()
     {
         std::string v = WaitValue<std::string>([&](auto cb) {
             conn.AsyncCall("GET", {"db:acall"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    if (!ec && resp.has_value()) {
-                        const auto& nodes = resp.value();
-                        if (!nodes.empty() && !boost::redis::resp3::is_aggregate(nodes[0].data_type))
-                            cb(nodes[0].value);
+                    if (ec.ok() && resp.has_value()) {
+                        
+                        if (!resp.is_array() && !resp.is_map())
+                            cb(resp.as_str());
                         else cb("");
                     } else cb("");
                 });
@@ -1327,12 +1330,12 @@ int MenuTestRedisAsyncCallEval()
     {
         std::string v = WaitValue<std::string>([&](auto cb) {
             conn.AsyncEval("return KEYS[1]", {"db:ek"}, {"arg1"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    if (!ec && resp.has_value()) {
-                        const auto& nodes = resp.value();
-                        if (!nodes.empty() && !boost::redis::resp3::is_aggregate(nodes[0].data_type))
-                            cb(nodes[0].value);
+                    if (ec.ok() && resp.has_value()) {
+                        
+                        if (!resp.is_array() && !resp.is_map())
+                            cb(resp.as_str());
                         else cb("");
                     } else cb("");
                 });
@@ -1345,12 +1348,12 @@ int MenuTestRedisAsyncCallEval()
     {
         bool ex = WaitValue<bool>([&](auto cb) {
             conn.AsyncCall("EXISTS", {"db:acall"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    if (!ec && resp.has_value()) {
-                        const auto& nodes = resp.value();
-                        if (!nodes.empty() && nodes[0].data_type == boost::redis::resp3::type::number)
-                            cb(nodes[0].value == "1");
+                    if (ec.ok() && resp.has_value()) {
+                        
+                        if (resp.is_int())
+                            cb(resp.as_int() == 1);
                         else cb(false);
                     } else cb(false);
                 });
@@ -1363,19 +1366,19 @@ int MenuTestRedisAsyncCallEval()
     {
         bool ok = WaitValue<bool>([&](auto cb) {
             conn.AsyncCall("ZADD", {"db:acall_z", "10", "x", "20", "y"},
-                [cb = std::move(cb)](boost::system::error_code ec, auto&&) mutable { cb(!ec); });
+                [cb = std::move(cb)](RedisError ec, auto&&) mutable { cb(ec.ok()); });
         });
         TestResult("AsyncCall ZADD x=10 y=20", ok);
         if (!ok) ++result;
 
         int64_t cnt = WaitValue<int64_t>([&](auto cb) {
             conn.AsyncCall("ZCARD", {"db:acall_z"},
-                [cb = std::move(cb)](boost::system::error_code ec,
+                [cb = std::move(cb)](RedisError ec,
                                      RedisConnection::GenericResponse resp) mutable {
-                    if (!ec && resp.has_value()) {
-                        const auto& nodes = resp.value();
-                        if (!nodes.empty() && nodes[0].data_type == boost::redis::resp3::type::number)
-                            cb(std::stoll(nodes[0].value));
+                    if (ec.ok() && resp.has_value()) {
+                        
+                        if (resp.is_int())
+                            cb(resp.as_int());
                         else cb(0);
                     } else cb(0);
                 });
@@ -1393,8 +1396,9 @@ int MenuTestRedisAsyncCallEval()
 int MenuTestRedisErrorCases()
 {
     TestSection("Redis — Error Handling (细粒度)");
-    RedisConnection conn;
-    if (!CreateConnection(conn)) { TestResult("Connect", false); return -1; }
+    IoEnv env;
+    RedisConnection conn(env.io_ctx);
+    if (!CreateConnection(conn, env.io_ctx)) { TestResult("Connect", false); return -1; }
     int result = 0;
 
     // Clean up stale keys at START (may be left by other test runs)
@@ -1446,7 +1450,8 @@ int MenuTestRedisLifecycle()
     int result = 0;
 
     {
-        RedisConnection conn;
+        IoEnv env;
+        RedisConnection conn(env.io_ctx);
 
         // connected_ flag may vary depending on boost::redis internal state; this
         // is a diagnostic-only check (always PASS, detail reflects actual state).

@@ -1,6 +1,7 @@
 #pragma once
 #include "redis_config.h"
 #include "redis_connection.h"
+#include <boost/asio/io_context.hpp>
 #include <memory>
 #include <vector>
 #include <atomic>
@@ -9,17 +10,19 @@
 ///
 /// 使用方式：
 /// @code
-///   RedisConnectionPool pool;
+///   RedisConnectionPool pool(io_ctx);
 ///   pool.Init(config);
 ///   auto* conn = pool.GetConnection();
-///   conn->Set("key", "value");
-///   auto val = conn->Get("key");
+///   conn->AsyncSet("key", "value", cb);
 /// @endcode
+///
+/// io_context 应由 IoServicePool 中的 IoWorker 运行。
+/// 连接池不创建或管理 io_context 线程。
 ///
 class RedisConnectionPool
 {
 public:
-    RedisConnectionPool()  = default;
+    explicit RedisConnectionPool(boost::asio::io_context& io_ctx);
     ~RedisConnectionPool();
 
     // 禁用拷贝
@@ -47,6 +50,7 @@ public:
     int CountHealthy() const;
 
 private:
+    boost::asio::io_context&                           io_ctx_;
     std::vector<std::unique_ptr<RedisConnection>> connections_;
     std::atomic<size_t>                           next_index_{0};
     RedisConfig                                   config_;

@@ -35,6 +35,7 @@ find_package(kcp REQUIRED)
 find_package(PostgreSQL REQUIRED)
 find_package(Catch2 REQUIRED)
 find_package(cnats REQUIRED)
+find_package(hiredis REQUIRED)
 
 if(MSVC)
     # MSVC 不接受 -fPIC（Conan 工具链可能开启）

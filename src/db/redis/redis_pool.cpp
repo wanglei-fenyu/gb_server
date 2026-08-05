@@ -1,6 +1,11 @@
 #include "redis_pool.h"
 #include "log/log.h"
 
+RedisConnectionPool::RedisConnectionPool(boost::asio::io_context& io_ctx)
+    : io_ctx_(io_ctx)
+{
+}
+
 RedisConnectionPool::~RedisConnectionPool()
 {
     CloseAll();
@@ -15,7 +20,7 @@ bool RedisConnectionPool::Init(const RedisConfig& cfg)
 
     for (int i = 0; i < pool_size; ++i)
     {
-        auto conn = std::make_unique<RedisConnection>();
+        auto conn = std::make_unique<RedisConnection>(io_ctx_);
         bool ok   = conn->Connect(cfg);
 
         if (!ok)
