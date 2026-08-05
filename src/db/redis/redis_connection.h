@@ -6,7 +6,6 @@
 #include <hiredis/async.h>
 #include <boost/asio/io_context.hpp>
 #include <boost/asio/post.hpp>
-#include <boost/asio/posix/stream_descriptor.hpp>
 #include <memory>
 #include <atomic>
 #include <string>
@@ -16,6 +15,30 @@
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
 #include "async_simple/coro/Lazy.h"
+
+// ── 跨平台 IO 句柄 ──
+// hiredis 事件循环桥接到 boost::asio reactor：
+//   POSIX：posix::stream_descriptor 直接包装 socket fd；
+//   Windows：boost::asio 不提供 posix 命名空间，等价物为 ip::tcp::socket
+//   （assign 原生句柄 + async_wait，内部走 select reactor）。
+#if defined(_WIN32)
+    #include <boost/asio/ip/tcp.hpp>
+    using RedisIoHandle = boost::asio::ip::tcp::socket;
+#else
+    #include <boost/asio/posix/stream_descriptor.hpp>
+    using RedisIoHandle = boost::asio::posix::stream_descriptor;
+#endif
+
+/// 将 hiredis 的 socket fd 绑定到 asio IO 句柄（平台差异封装）。
+inline void RedisAssignHandle(RedisIoHandle& h, int fd)
+{
+#if defined(_WIN32)
+    h.assign(boost::asio::ip::tcp::v4(),
+             static_cast<RedisIoHandle::native_handle_type>(fd));
+#else
+    h.assign(fd);
+#endif
+}
 
 /// Redis 连接封装（hiredis 异步 API + boost::asio reactor 适配）。
 ///
@@ -238,8 +261,8 @@ private:
 private:
     boost::asio::io_context&                                        io_ctx_;
     redisAsyncContext*                                                async_ctx_{nullptr};
-    boost::asio::posix::stream_descriptor                             read_descriptor_;
-    boost::asio::posix::stream_descriptor                             write_descriptor_;
+    RedisIoHandle                                                     read_descriptor_;
+    RedisIoHandle                                                     write_descriptor_;
     std::atomic<bool>                                                 connected_{false};
     bool                                                              ctx_alive_{false};
     bool                                                              read_requested_{false};

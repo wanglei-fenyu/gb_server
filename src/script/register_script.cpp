@@ -226,7 +226,6 @@ extern void register_proto_msg(std::shared_ptr<Script>& scriptPtr);
 extern void register_redis(std::shared_ptr<Script>& scriptPtr);
 extern void register_postgresql(std::shared_ptr<Script>& scriptPtr);
 extern void register_nats(std::shared_ptr<Script>& scriptPtr);
-extern void register_etcd(std::shared_ptr<Script>& scriptPtr);
 extern void register_timer(std::shared_ptr<Script>& scriptPtr);
 
 void _lua_(std::shared_ptr<Script>& scriptPtr)
@@ -239,6 +238,5 @@ void _lua_(std::shared_ptr<Script>& scriptPtr)
     register_redis(scriptPtr);
     register_postgresql(scriptPtr);
     register_nats(scriptPtr);
-    register_etcd(scriptPtr);
     register_timer(scriptPtr);
 }

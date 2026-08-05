@@ -1090,8 +1090,8 @@ void RedisConnection::StartConnectChain(const std::shared_ptr<ConnectChain>& cha
     }
 
     ctx_alive_ = true;
-    read_descriptor_.assign(fd);
-    write_descriptor_.assign(fd);
+    RedisAssignHandle(read_descriptor_, fd);
+    RedisAssignHandle(write_descriptor_, fd);
     OnAddRead();
 }
 
@@ -1179,7 +1179,7 @@ void RedisConnection::OnAddRead()
 {
     if (!async_ctx_ || !ctx_alive_)
         return;
-    read_descriptor_.async_wait(boost::asio::posix::stream_descriptor::wait_read,
+    read_descriptor_.async_wait(RedisIoHandle::wait_read,
         [this](const boost::system::error_code& ec) {
             if (!ec)
             {
@@ -1198,7 +1198,7 @@ void RedisConnection::OnAddWrite()
 {
     if (!async_ctx_ || !ctx_alive_)
         return;
-    write_descriptor_.async_wait(boost::asio::posix::stream_descriptor::wait_write,
+    write_descriptor_.async_wait(RedisIoHandle::wait_write,
         [this](const boost::system::error_code& ec) {
             if (!ec)
             {
