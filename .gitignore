@@ -12,6 +12,7 @@ tools/luasocket/test
 *.log
 
 # IDE
+.omo/
 .vs/
 .vscode/
 *.user
