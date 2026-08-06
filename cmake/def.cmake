@@ -27,7 +27,7 @@ macro(conan_link_libraries target_name)
     target_link_libraries(${target_name} ${_link_type}
         asio::asio
         spdlog::spdlog
-        protobuf::protobuf
+        protobuf::libprotobuf
         OpenSSL::SSL
         OpenSSL::Crypto
         ZLIB::ZLIB
