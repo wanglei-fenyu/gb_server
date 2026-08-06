@@ -1,0 +1,11 @@
+sources:
+  1.82.0:
+    sha256: d6851f59b9c4edb3218d2659a3abf1138e5bb4d2871c9e89c9330ed71756ed0b
+    url: https://github.com/grpc/grpc/archive/refs/tags/v1.82.0.tar.gz
+
+patches:
+  1.82.0:
+    - patch_file: patches/msvc19.5x-c3539.patch
+      patch_type: bugfix
+      description: Workaround for MSVC 19.50+ (VS2026) C3539 in call_filters.h (grpc/grpc#41970)
+      strip: 0

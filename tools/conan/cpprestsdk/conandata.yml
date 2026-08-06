@@ -1,0 +1,16 @@
+patches:
+  2.10.19:
+  - patch_description: 'CMake: internal targets'
+    patch_file: patches/0003-find-cmake-targets.patch
+    patch_type: conan
+  - patch_description: fix warnings
+    patch_file: patches/0002-remove-wconversion.patch
+    patch_type: conan
+  - patch_description: 'MSVC 14.51 (VS2026): stdext::checked_array_iterator removed from STL'
+    patch_file: patches/msvc14.51-stdext.patch
+    patch_type: bugfix
+    strip: 0
+sources:
+  2.10.19:
+    sha256: 4b0d14e5bfe77ce419affd253366e861968ae6ef2c35ae293727c1415bd145c8
+    url: https://github.com/microsoft/cpprestsdk/archive/refs/tags/v2.10.19.tar.gz

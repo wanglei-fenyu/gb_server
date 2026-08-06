@@ -1,0 +1,21 @@
+diff --git a/src/core/call/call_filters.h b/src/core/call/call_filters.h
+index 4ec8ac8..e22572a 100644
+--- a/src/core/call/call_filters.h
++++ b/src/core/call/call_filters.h
+@@ -1631,6 +1631,16 @@ constexpr bool AnyMethodHasChannelAccess = (MethodHasChannelAccess<Ts> || ...);
+ // fall into this category: later code should use this.
+ template <typename Derived>
+ inline constexpr bool CallHasChannelAccess() {
++  // Workaround for MSVC 19.50+ (VS2026) compiler bug C3539: MSVC fails to
++  // resolve `decltype(&Derived::Call::...)` when used directly as template
++  // arguments. Pre-resolving the member pointers keeps the compiler on track.
++  // See https://github.com/grpc/grpc/issues/41970
++  [[maybe_unused]] constexpr auto a = &Derived::Call::OnClientInitialMetadata;
++  [[maybe_unused]] constexpr auto b = &Derived::Call::OnClientToServerMessage;
++  [[maybe_unused]] constexpr auto c = &Derived::Call::OnServerInitialMetadata;
++  [[maybe_unused]] constexpr auto d = &Derived::Call::OnServerToClientMessage;
++  [[maybe_unused]] constexpr auto e = &Derived::Call::OnServerTrailingMetadata;
++  [[maybe_unused]] constexpr auto f = &Derived::Call::OnFinalize;
+   return AnyMethodHasChannelAccess<
+       decltype(&Derived::Call::OnClientInitialMetadata),
+       decltype(&Derived::Call::OnClientToServerMessage),

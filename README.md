@@ -18,6 +18,27 @@ c++ 网络游戏服务器框架
     3. cmake --preset conan-debug
     4. cmake --build --preset conan-debug --parallel
 
+### 依赖补丁（VS2026 / MSVC 19.51 兼容）
+
+`grpc/1.82.0` 与 `cpprestsdk/2.10.19` 在 VS2026（MSVC 19.51）下无法直接编译，项目内置了带补丁的 conan 配方（`tools/conan/`）：
+
+| 配方 | 原版编译错误 | 补丁文件 |
+|---|---|---|
+| `grpc/1.82.0` | `error C3539`（call_filters.h 模板实参推导失败，上游 grpc/grpc#41436、#41970） | `tools/conan/grpc/patches/msvc19.5x-c3539.patch` |
+| `cpprestsdk/2.10.19` | `error C2065: stdext 未声明的标识符`（MSVC 19.51 STL 已移除 `stdext` 命名空间） | `tools/conan/cpprestsdk/patches/msvc14.51-stdext.patch` |
+
+- **`build.bat` / `conan_install.bat` 已自动处理**：install 前会自动执行 `conan export` 把补丁配方导入本地缓存，无需手动操作。
+- 手动安装依赖（不走 bat）时，先导出再安装：
+
+  ```bat
+  conan export --name grpc --version 1.82.0 tools/conan/grpc
+  conan export --name cpprestsdk --version 2.10.19 tools/conan/cpprestsdk
+  conan install . -pr=profiles/msvc_debug_pr --build=missing
+  ```
+
+- 原理：conan 依赖解析**本地缓存优先**，只要先 export 补丁配方，就不会拉取 conancenter 原版配方；补丁由 `apply_conandata_patches()` 在每次构建时自动应用，无需改任何文件。
+- 补丁仅影响 MSVC 编译路径（条件编译分支），对 Linux/clang 构建无害，同一配方可跨平台使用。
+
 ---
 
 # 架构总览

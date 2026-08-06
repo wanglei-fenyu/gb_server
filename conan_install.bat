@@ -1,5 +1,6 @@
 @echo off
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 REM Quick Conan installer for this repo.
 REM Default is tuned for Windows/Linux compatibility with explicit host/build profiles.
@@ -81,13 +82,20 @@ echo Build profile: %PROFILE_BUILD%
 echo cppstd       : %CPPSTD%
 
 if "%DO_CLEAN%"=="1" (
-  echo [1/2] Cleaning local Conan cache...
+  echo [1/3] Cleaning local Conan cache...
   conan remove "*" -c
   if errorlevel 1 exit /b 1
   echo [OK] Cache cleaned
 )
 
-echo [2/2] Installing dependencies...
+echo [2/3] Exporting patched recipes (VS2026 fixes)...
+conan export --name grpc --version 1.82.0 tools/conan/grpc
+if errorlevel 1 exit /b 1
+conan export --name cpprestsdk --version 2.10.19 tools/conan/cpprestsdk
+if errorlevel 1 exit /b 1
+echo [OK] Patched recipes exported
+
+echo [3/3] Installing dependencies...
 set "CMD=conan install . -pr:h=%PROFILE_HOST% -pr:b=%PROFILE_BUILD% -s:h compiler.cppstd=%CPPSTD%"
 if "%BUILD_MISSING%"=="1" set "CMD=%CMD% --build=missing"
 set "CMD=%CMD%%EXTRA_ARGS%"

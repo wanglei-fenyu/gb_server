@@ -1,6 +1,7 @@
 @echo off
 chcp 65001 >nul
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 echo ==========================================
 echo 开始 Windows 编译流程
@@ -21,6 +22,20 @@ echo VS x64 环境初始化成功!
 echo.
 
 echo 步骤 1/3: 安装依赖 (conan install)...
+echo   导出补丁配方 (grpc C3539 + cpprestsdk stdext, VS2026 修复)...
+conan export --name grpc --version 1.82.0 tools/conan/grpc
+if %errorlevel% neq 0 (
+    echo 错误: grpc 补丁配方导出失败
+    pause
+    exit /b %errorlevel%
+)
+conan export --name cpprestsdk --version 2.10.19 tools/conan/cpprestsdk
+if %errorlevel% neq 0 (
+    echo 错误: cpprestsdk 补丁配方导出失败
+    pause
+    exit /b %errorlevel%
+)
+echo   补丁配方导出完成
 conan install . -pr=profiles/msvc_debug_pr --build=missing
 if %errorlevel% neq 0 (
     echo 错误: conan install 失败

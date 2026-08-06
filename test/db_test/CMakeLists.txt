@@ -13,9 +13,6 @@ if(MSVC)
     target_compile_options(${TARGET_NAME} PRIVATE /bigobj)
 endif()
 
-# ========== 编译宏定义 ==========
-add_definitions(-DPROTOBUF_USE_DLLS)
-
 # ========== 收集公共源码（src 目录）==========
 if(NOT COMMON_CPP_DIR)
     set(COMMON_CPP_DIR ${CMAKE_SOURCE_DIR}/src)

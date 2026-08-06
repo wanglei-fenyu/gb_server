@@ -13,9 +13,6 @@ if(MSVC)
     target_compile_options(${TARGET_NAME} PRIVATE /bigobj)
 endif()
 
-add_definitions(-DPROTOBUF_USE_DLLS)
-
-
 if(NOT COMMON_CPP_DIR)
     set(COMMON_CPP_DIR ${CMAKE_SOURCE_DIR}/src)
 endif()
