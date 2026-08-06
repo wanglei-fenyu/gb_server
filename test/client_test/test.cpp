@@ -1,5 +1,8 @@
 ﻿#include "test.h"
 #include "network/io/message_meta.h"
+#include "network/http/server_http.hpp"
+#include "network/http/client_http.hpp"
+#include <thread>
 void hello(TestMsg& msg)
 {
 	LOG_INFO("index:{}  msg{}",msg.index(), msg.msg());
@@ -46,15 +49,22 @@ void SendRpc(std::shared_ptr<gb::Client> client)
 
 void http_test(std::shared_ptr<gb::Client> client)
 {
-//    auto& service     = client->GetIoServicePool()->GetIoService().second;
-//    auto http_client = std::make_shared<gb::HttpClient>(service);
-//    boost::asio::co_spawn(service, [http_client]() -> boost::asio::awaitable<void> {
-//            auto res = co_await http_client->Get("http://www.baidu.com/");
-//        std::cout << "Coroutine GET status: " << res.status << "\n";
-//        std::cout << "Body length: " << res.body.size() << "\n";
-//        std::cout << "Body: " << res.body << "\n";
-//        co_return;
-//    }, boost::asio::detached);
+    using HttpServer = gb::http::Server<gb::http::HTTP>;
+    HttpServer server;
+    server.config.port = 18081;
+    server.resource["^/hello$"]["GET"] = [](std::shared_ptr<HttpServer::Response> res, std::shared_ptr<HttpServer::Request> req) {
+        res->write("hello from local server");
+        res->send();
+    };
+    std::thread server_thread([&server]() { server.start(); });
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    gb::http::Client<gb::http::HTTP> http_client("127.0.0.1:18081");
+    auto res = http_client.request("GET", "/hello");
+    LOG_INFO("HTTP test status: {} body: {}", res->status_code, res->content.string());
+
+    server.stop();
+    server_thread.join();
 }
 
 //async_simple::coro::Lazy<> test_coro(gb::SessionPtr& session)

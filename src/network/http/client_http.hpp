@@ -1,0 +1,710 @@
+#pragma once
+// Ported from Simple-Web-Server (https://github.com/eidheim/Simple-Web-Server)
+// MIT License - Copyright (c) 2014-2018 Ole Christian Eidheim
+
+#include "utility.hpp"
+#include <limits>
+#include <mutex>
+#include <random>
+#include <unordered_set>
+#include <vector>
+
+#ifdef USE_STANDALONE_ASIO
+#include <asio.hpp>
+#include <asio/steady_timer.hpp>
+namespace gb::http {
+  using error_code = std::error_code;
+  using errc = std::errc;
+  using system_error = std::system_error;
+  namespace make_error_code = std;
+} // namespace gb::http
+#else
+#include <boost/asio.hpp>
+#include <boost/asio/steady_timer.hpp>
+#include <boost/asio/query.hpp>
+#include <boost/asio/execution/context.hpp>
+namespace gb::http {
+  namespace asio = boost::asio;
+  using error_code = boost::system::error_code;
+  namespace errc = boost::system::errc;
+  using system_error = boost::system::system_error;
+  namespace make_error_code = boost::system::errc;
+} // namespace gb::http
+#endif
+
+#if __cplusplus > 201402L || (defined(_MSC_VER) && _MSC_VER >= 1910)
+#include <string_view>
+namespace gb::http {
+  using string_view = std::string_view;
+}
+#elif !defined(USE_STANDALONE_ASIO)
+#include <boost/utility/string_ref.hpp>
+namespace gb::http {
+  using string_view = boost::string_ref;
+}
+#else
+namespace gb::http {
+  using string_view = const std::string &;
+}
+#endif
+
+namespace gb::http {
+  template <class socket_type>
+  class Client;
+
+  template <class socket_type>
+  class ClientBase {
+  public:
+    class Content : public std::istream {
+      friend class ClientBase<socket_type>;
+
+    public:
+      std::size_t size() noexcept {
+        return streambuf.size();
+      }
+      /// 便捷函数，返回 std::string。流缓冲区将被消耗。
+      std::string string() noexcept {
+        try {
+          std::string str;
+          auto size = streambuf.size();
+          str.resize(size);
+          read(&str[0], static_cast<std::streamsize>(size));
+          return str;
+        }
+        catch(...) {
+          return std::string();
+        }
+      }
+
+    private:
+      asio::streambuf &streambuf;
+      Content(asio::streambuf &streambuf) noexcept : std::istream(&streambuf), streambuf(streambuf) {}
+    };
+
+    class Response {
+      friend class ClientBase<socket_type>;
+      friend class Client<socket_type>;
+
+      asio::streambuf streambuf;
+
+      Response(std::size_t max_response_streambuf_size) noexcept : streambuf(max_response_streambuf_size), content(streambuf) {}
+
+    public:
+      std::string http_version, status_code;
+
+      Content content;
+
+      CaseInsensitiveMultimap header;
+    };
+
+    class Config {
+      friend class ClientBase<socket_type>;
+
+    private:
+      Config() noexcept {}
+
+    public:
+      /// 设置请求超时时间（秒）。默认值：0（无超时）。
+      long timeout = 0;
+      /// 设置连接超时时间（秒）。默认值：0（改用 Config::timeout）。
+      long timeout_connect = 0;
+      /// 响应流缓冲区的最大大小。默认为架构最大值。
+      /// 达到该限制将返回 message_size 错误码。
+      std::size_t max_response_streambuf_size = std::numeric_limits<std::size_t>::max();
+      /// 设置代理服务器（server:port）
+      std::string proxy_server;
+    };
+
+  protected:
+    class Connection : public std::enable_shared_from_this<Connection> {
+    public:
+      template <typename... Args>
+      Connection(std::shared_ptr<ScopeRunner> handler_runner, long timeout, Args &&... args) noexcept
+          : handler_runner(std::move(handler_runner)), timeout(timeout), socket(new socket_type(std::forward<Args>(args)...)) {}
+
+      std::shared_ptr<ScopeRunner> handler_runner;
+      long timeout;
+
+      std::unique_ptr<socket_type> socket; // Socket 必须用 unique_ptr，因为 asio::ssl::stream<asio::ip::tcp::socket> 不可移动
+      bool in_use = false;
+      bool attempt_reconnect = true;
+
+      std::unique_ptr<asio::steady_timer> timer;
+
+      void set_timeout(long seconds = 0) noexcept {
+        if(seconds == 0)
+          seconds = timeout;
+        if(seconds == 0) {
+          timer = nullptr;
+          return;
+        }
+        auto &io_context = static_cast<asio::io_context &>(asio::query(socket->get_executor(), asio::execution::context));
+        timer = std::unique_ptr<asio::steady_timer>(new asio::steady_timer(io_context));
+        timer->expires_after(std::chrono::seconds(seconds));
+        auto self = this->shared_from_this();
+        timer->async_wait([self](const error_code &ec) {
+          if(!ec) {
+            error_code ec;
+            self->socket->lowest_layer().cancel(ec);
+          }
+        });
+      }
+
+      void cancel_timeout() noexcept {
+        if(timer) {
+          timer->cancel();
+        }
+      }
+    };
+
+    class Session {
+    public:
+      Session(std::size_t max_response_streambuf_size, std::shared_ptr<Connection> connection, std::unique_ptr<asio::streambuf> request_streambuf) noexcept
+          : connection(std::move(connection)), request_streambuf(std::move(request_streambuf)), response(new Response(max_response_streambuf_size)) {}
+
+      std::shared_ptr<Connection> connection;
+      std::unique_ptr<asio::streambuf> request_streambuf;
+      std::shared_ptr<Response> response;
+      std::function<void(const std::shared_ptr<Connection> &, const error_code &)> callback;
+    };
+
+  public:
+    /// 调用 request 前设置
+    Config config;
+
+    /// 如果你有自己的 asio::io_context，在调用 request() 前把指针存到这里。
+    /// 使用异步请求时，io_context 的运行由程序员负责。
+    std::shared_ptr<asio::io_context> io_context;
+
+    /// 便捷函数，执行同步请求。io_context 在此函数内部运行。
+    /// 如果 io_context 还要用于其他任务，请改用异步请求函数。
+    /// 不要与异步请求函数并发使用。
+    std::shared_ptr<Response> request(const std::string &method, const std::string &path = std::string("/"),
+                                      string_view content = "", const CaseInsensitiveMultimap &header = CaseInsensitiveMultimap()) {
+      std::shared_ptr<Response> response;
+      error_code ec;
+      request(method, path, content, header, [&response, &ec](std::shared_ptr<Response> response_, const error_code &ec_) {
+        response = response_;
+        ec = ec_;
+      });
+
+      {
+        std::unique_lock<std::mutex> lock(concurrent_synchronous_requests_mutex);
+        ++concurrent_synchronous_requests;
+      }
+      io_context->run();
+      {
+        std::unique_lock<std::mutex> lock(concurrent_synchronous_requests_mutex);
+        --concurrent_synchronous_requests;
+        if(!concurrent_synchronous_requests)
+          io_context->restart();
+      }
+
+      if(ec)
+        throw system_error(ec);
+
+      return response;
+    }
+
+    /// 便捷函数，执行同步请求。io_context 在此函数内部运行。
+    /// 如果 io_context 还要用于其他任务，请改用异步请求函数。
+    /// 不要与异步请求函数并发使用。
+    std::shared_ptr<Response> request(const std::string &method, const std::string &path, std::istream &content,
+                                      const CaseInsensitiveMultimap &header = CaseInsensitiveMultimap()) {
+      std::shared_ptr<Response> response;
+      error_code ec;
+      request(method, path, content, header, [&response, &ec](std::shared_ptr<Response> response_, const error_code &ec_) {
+        response = response_;
+        ec = ec_;
+      });
+
+      {
+        std::unique_lock<std::mutex> lock(concurrent_synchronous_requests_mutex);
+        ++concurrent_synchronous_requests;
+      }
+      io_context->run();
+      {
+        std::unique_lock<std::mutex> lock(concurrent_synchronous_requests_mutex);
+        --concurrent_synchronous_requests;
+        if(!concurrent_synchronous_requests)
+          io_context->restart();
+      }
+
+      if(ec)
+        throw system_error(ec);
+
+      return response;
+    }
+
+    /// 异步请求，需要设置和/或运行 Client 的 io_context。
+    /// 不要与同步请求函数并发使用。
+    void request(const std::string &method, const std::string &path, string_view content, const CaseInsensitiveMultimap &header,
+                 std::function<void(std::shared_ptr<Response>, const error_code &)> &&request_callback_) {
+      auto session = std::make_shared<Session>(config.max_response_streambuf_size, get_connection(), create_request_header(method, path, header));
+      auto response = session->response;
+      auto request_callback = std::make_shared<std::function<void(std::shared_ptr<Response>, const error_code &)>>(std::move(request_callback_));
+      session->callback = [this, response, request_callback](const std::shared_ptr<Connection> &connection, const error_code &ec) {
+        {
+          std::unique_lock<std::mutex> lock(this->connections_mutex);
+          connection->in_use = false;
+
+          // 清理未使用的连接，但保留一个用于 HTTP 持久连接：
+          std::size_t unused_connections = 0;
+          for(auto it = this->connections.begin(); it != this->connections.end();) {
+            if(ec && connection == *it)
+              it = this->connections.erase(it);
+            else if((*it)->in_use)
+              ++it;
+            else {
+              ++unused_connections;
+              if(unused_connections > 1)
+                it = this->connections.erase(it);
+              else
+                ++it;
+            }
+          }
+        }
+
+        if(*request_callback)
+          (*request_callback)(response, ec);
+      };
+
+      std::ostream write_stream(session->request_streambuf.get());
+      if(content.size() > 0) {
+        auto header_it = header.find("Content-Length");
+        if(header_it == header.end()) {
+          header_it = header.find("Transfer-Encoding");
+          if(header_it == header.end() || header_it->second != "chunked")
+            write_stream << "Content-Length: " << content.size() << "\r\n";
+        }
+      }
+      write_stream << "\r\n"
+                   << content;
+
+      connect(session);
+    }
+
+    /// 异步请求，需要设置和/或运行 Client 的 io_context。
+    /// 不要与同步请求函数并发使用。
+    void request(const std::string &method, const std::string &path, string_view content,
+                 std::function<void(std::shared_ptr<Response>, const error_code &)> &&request_callback) {
+      request(method, path, content, CaseInsensitiveMultimap(), std::move(request_callback));
+    }
+
+    /// 异步请求，需要设置和/或运行 Client 的 io_context。
+    void request(const std::string &method, const std::string &path,
+                 std::function<void(std::shared_ptr<Response>, const error_code &)> &&request_callback) {
+      request(method, path, std::string(), CaseInsensitiveMultimap(), std::move(request_callback));
+    }
+
+    /// 异步请求，需要设置和/或运行 Client 的 io_context。
+    void request(const std::string &method, std::function<void(std::shared_ptr<Response>, const error_code &)> &&request_callback) {
+      request(method, std::string("/"), std::string(), CaseInsensitiveMultimap(), std::move(request_callback));
+    }
+
+    /// 异步请求，需要设置和/或运行 Client 的 io_context。
+    void request(const std::string &method, const std::string &path, std::istream &content, const CaseInsensitiveMultimap &header,
+                 std::function<void(std::shared_ptr<Response>, const error_code &)> &&request_callback_) {
+      auto session = std::make_shared<Session>(config.max_response_streambuf_size, get_connection(), create_request_header(method, path, header));
+      auto response = session->response;
+      auto request_callback = std::make_shared<std::function<void(std::shared_ptr<Response>, const error_code &)>>(std::move(request_callback_));
+      session->callback = [this, response, request_callback](const std::shared_ptr<Connection> &connection, const error_code &ec) {
+        {
+          std::unique_lock<std::mutex> lock(this->connections_mutex);
+          connection->in_use = false;
+
+          // 清理未使用的连接，但保留一个用于 HTTP 持久连接：
+          std::size_t unused_connections = 0;
+          for(auto it = this->connections.begin(); it != this->connections.end();) {
+            if(ec && connection == *it)
+              it = this->connections.erase(it);
+            else if((*it)->in_use)
+              ++it;
+            else {
+              ++unused_connections;
+              if(unused_connections > 1)
+                it = this->connections.erase(it);
+              else
+                ++it;
+            }
+          }
+        }
+
+        if(*request_callback)
+          (*request_callback)(response, ec);
+      };
+
+      content.seekg(0, std::ios::end);
+      auto content_length = content.tellg();
+      content.seekg(0, std::ios::beg);
+      std::ostream write_stream(session->request_streambuf.get());
+      if(content_length > 0) {
+        auto header_it = header.find("Content-Length");
+        if(header_it == header.end()) {
+          header_it = header.find("Transfer-Encoding");
+          if(header_it == header.end() || header_it->second != "chunked")
+            write_stream << "Content-Length: " << content_length << "\r\n";
+        }
+      }
+      write_stream << "\r\n";
+      if(content_length > 0)
+        write_stream << content.rdbuf();
+
+      connect(session);
+    }
+
+    /// 异步请求，需要设置和/或运行 Client 的 io_context。
+    void request(const std::string &method, const std::string &path, std::istream &content,
+                 std::function<void(std::shared_ptr<Response>, const error_code &)> &&request_callback) {
+      request(method, path, content, CaseInsensitiveMultimap(), std::move(request_callback));
+    }
+
+    /// 关闭连接
+    void stop() noexcept {
+      std::unique_lock<std::mutex> lock(connections_mutex);
+      for(auto it = connections.begin(); it != connections.end();) {
+        error_code ec;
+        (*it)->socket->lowest_layer().cancel(ec);
+        it = connections.erase(it);
+      }
+    }
+
+    virtual ~ClientBase() noexcept {
+      handler_runner->stop();
+      stop();
+    }
+
+  protected:
+    bool internal_io_context = false;
+
+    std::string host;
+    unsigned short port;
+    unsigned short default_port;
+
+    std::string query_host;
+    std::string query_service;
+
+    std::unordered_set<std::shared_ptr<Connection>> connections;
+    std::mutex connections_mutex;
+
+    std::shared_ptr<ScopeRunner> handler_runner;
+
+    std::size_t concurrent_synchronous_requests = 0;
+    std::mutex concurrent_synchronous_requests_mutex;
+
+    ClientBase(const std::string &host_port, unsigned short default_port) noexcept : default_port(default_port), handler_runner(new ScopeRunner()) {
+      auto parsed_host_port = parse_host_port(host_port, default_port);
+      host = parsed_host_port.first;
+      port = parsed_host_port.second;
+    }
+
+    std::shared_ptr<Connection> get_connection() noexcept {
+      std::shared_ptr<Connection> connection;
+      std::unique_lock<std::mutex> lock(connections_mutex);
+
+      if(!io_context) {
+        io_context = std::make_shared<asio::io_context>();
+        internal_io_context = true;
+      }
+
+      for(auto it = connections.begin(); it != connections.end(); ++it) {
+        if(!(*it)->in_use && !connection) {
+          connection = *it;
+          break;
+        }
+      }
+      if(!connection) {
+        connection = create_connection();
+        connections.emplace(connection);
+      }
+      connection->attempt_reconnect = true;
+      connection->in_use = true;
+
+      if(query_host.empty()) {
+        if(config.proxy_server.empty())
+          query_host = host, query_service = std::to_string(port);
+        else {
+          auto proxy_host_port = parse_host_port(config.proxy_server, 8080);
+          query_host = proxy_host_port.first, query_service = std::to_string(proxy_host_port.second);
+        }
+      }
+
+      return connection;
+    }
+
+    virtual std::shared_ptr<Connection> create_connection() noexcept = 0;
+    virtual void connect(const std::shared_ptr<Session> &) = 0;
+
+    std::unique_ptr<asio::streambuf> create_request_header(const std::string &method, const std::string &path, const CaseInsensitiveMultimap &header) const {
+      auto corrected_path = path;
+      if(corrected_path == "")
+        corrected_path = "/";
+      if(!config.proxy_server.empty() && std::is_same<socket_type, asio::ip::tcp::socket>::value)
+        corrected_path = "http://" + host + ':' + std::to_string(port) + corrected_path;
+
+      std::unique_ptr<asio::streambuf> streambuf(new asio::streambuf());
+      std::ostream write_stream(streambuf.get());
+      write_stream << method << " " << corrected_path << " HTTP/1.1\r\n";
+      write_stream << "Host: " << host;
+      if(port != default_port)
+        write_stream << ':' << std::to_string(port);
+      write_stream << "\r\n";
+      for(auto &h : header)
+        write_stream << h.first << ": " << h.second << "\r\n";
+      return streambuf;
+    }
+
+    std::pair<std::string, unsigned short> parse_host_port(const std::string &host_port, unsigned short default_port) const noexcept {
+      std::pair<std::string, unsigned short> parsed_host_port;
+      std::size_t host_end = host_port.find(':');
+      if(host_end == std::string::npos) {
+        parsed_host_port.first = host_port;
+        parsed_host_port.second = default_port;
+      }
+      else {
+        parsed_host_port.first = host_port.substr(0, host_end);
+        parsed_host_port.second = static_cast<unsigned short>(stoul(host_port.substr(host_end + 1)));
+      }
+      return parsed_host_port;
+    }
+
+    void write(const std::shared_ptr<Session> &session) {
+      session->connection->set_timeout();
+      asio::async_write(*session->connection->socket, session->request_streambuf->data(), [this, session](const error_code &ec, std::size_t /*bytes_transferred*/) {
+        session->connection->cancel_timeout();
+        auto lock = session->connection->handler_runner->continue_lock();
+        if(!lock)
+          return;
+        if(!ec)
+          this->read(session);
+        else
+          session->callback(session->connection, ec);
+      });
+    }
+
+    void read(const std::shared_ptr<Session> &session) {
+      session->connection->set_timeout();
+      asio::async_read_until(*session->connection->socket, session->response->streambuf, "\r\n\r\n", [this, session](const error_code &ec, std::size_t bytes_transferred) {
+        session->connection->cancel_timeout();
+        auto lock = session->connection->handler_runner->continue_lock();
+        if(!lock)
+          return;
+        if((!ec || ec == asio::error::not_found) && session->response->streambuf.size() == session->response->streambuf.max_size()) {
+          session->callback(session->connection, make_error_code::make_error_code(errc::message_size));
+          return;
+        }
+        if(!ec) {
+          session->connection->attempt_reconnect = true;
+          std::size_t num_additional_bytes = session->response->streambuf.size() - bytes_transferred;
+
+          if(!ResponseMessage::parse(session->response->content, session->response->http_version, session->response->status_code, session->response->header)) {
+            session->callback(session->connection, make_error_code::make_error_code(errc::protocol_error));
+            return;
+          }
+
+          auto header_it = session->response->header.find("Content-Length");
+          if(header_it != session->response->header.end()) {
+            auto content_length = stoull(header_it->second);
+            if(content_length > num_additional_bytes) {
+              session->connection->set_timeout();
+              asio::async_read(*session->connection->socket, session->response->streambuf, asio::transfer_exactly(content_length - num_additional_bytes), [session](const error_code &ec, std::size_t /*bytes_transferred*/) {
+                session->connection->cancel_timeout();
+                auto lock = session->connection->handler_runner->continue_lock();
+                if(!lock)
+                  return;
+                if(!ec) {
+                  if(session->response->streambuf.size() == session->response->streambuf.max_size()) {
+                    session->callback(session->connection, make_error_code::make_error_code(errc::message_size));
+                    return;
+                  }
+                  session->callback(session->connection, ec);
+                }
+                else
+                  session->callback(session->connection, ec);
+              });
+            }
+            else
+              session->callback(session->connection, ec);
+          }
+          else if((header_it = session->response->header.find("Transfer-Encoding")) != session->response->header.end() && header_it->second == "chunked") {
+            auto chunks_streambuf = std::make_shared<asio::streambuf>(this->config.max_response_streambuf_size);
+            this->read_chunked_transfer_encoded(session, chunks_streambuf);
+          }
+          else if(session->response->http_version < "1.1" || ((header_it = session->response->header.find("Session")) != session->response->header.end() && header_it->second == "close")) {
+            session->connection->set_timeout();
+            asio::async_read(*session->connection->socket, session->response->streambuf, [session](const error_code &ec, std::size_t /*bytes_transferred*/) {
+              session->connection->cancel_timeout();
+              auto lock = session->connection->handler_runner->continue_lock();
+              if(!lock)
+                return;
+              if(!ec) {
+                if(session->response->streambuf.size() == session->response->streambuf.max_size()) {
+                  session->callback(session->connection, make_error_code::make_error_code(errc::message_size));
+                  return;
+                }
+                session->callback(session->connection, ec);
+              }
+              else
+                session->callback(session->connection, ec == asio::error::eof ? error_code() : ec);
+            });
+          }
+          else
+            session->callback(session->connection, ec);
+        }
+        else {
+          if(session->connection->attempt_reconnect && ec != asio::error::operation_aborted) {
+            std::unique_lock<std::mutex> lock(connections_mutex);
+            auto it = connections.find(session->connection);
+            if(it != connections.end()) {
+              connections.erase(it);
+              session->connection = create_connection();
+              session->connection->attempt_reconnect = false;
+              session->connection->in_use = true;
+              connections.emplace(session->connection);
+              lock.unlock();
+              this->connect(session);
+            }
+            else {
+              lock.unlock();
+              session->callback(session->connection, ec);
+            }
+          }
+          else
+            session->callback(session->connection, ec);
+        }
+      });
+    }
+
+    void read_chunked_transfer_encoded(const std::shared_ptr<Session> &session, const std::shared_ptr<asio::streambuf> &chunks_streambuf) {
+      session->connection->set_timeout();
+      asio::async_read_until(*session->connection->socket, session->response->streambuf, "\r\n", [this, session, chunks_streambuf](const error_code &ec, size_t bytes_transferred) {
+        session->connection->cancel_timeout();
+        auto lock = session->connection->handler_runner->continue_lock();
+        if(!lock)
+          return;
+        if((!ec || ec == asio::error::not_found) && session->response->streambuf.size() == session->response->streambuf.max_size()) {
+          session->callback(session->connection, make_error_code::make_error_code(errc::message_size));
+          return;
+        }
+        if(!ec) {
+          std::string line;
+          getline(session->response->content, line);
+          bytes_transferred -= line.size() + 1;
+          line.pop_back();
+          unsigned long length = 0;
+          try {
+            length = stoul(line, 0, 16);
+          }
+          catch(...) {
+            session->callback(session->connection, make_error_code::make_error_code(errc::protocol_error));
+            return;
+          }
+
+          auto num_additional_bytes = session->response->streambuf.size() - bytes_transferred;
+
+          if((2 + length) > num_additional_bytes) {
+            session->connection->set_timeout();
+            asio::async_read(*session->connection->socket, session->response->streambuf, asio::transfer_exactly(2 + length - num_additional_bytes), [this, session, chunks_streambuf, length](const error_code &ec, size_t /*bytes_transferred*/) {
+              session->connection->cancel_timeout();
+              auto lock = session->connection->handler_runner->continue_lock();
+              if(!lock)
+                return;
+              if(!ec) {
+                if(session->response->streambuf.size() == session->response->streambuf.max_size()) {
+                  session->callback(session->connection, make_error_code::make_error_code(errc::message_size));
+                  return;
+                }
+                this->read_chunked_transfer_encoded_chunk(session, chunks_streambuf, length);
+              }
+              else
+                session->callback(session->connection, ec);
+            });
+          }
+          else
+            this->read_chunked_transfer_encoded_chunk(session, chunks_streambuf, length);
+        }
+        else
+          session->callback(session->connection, ec);
+      });
+    }
+
+    void read_chunked_transfer_encoded_chunk(const std::shared_ptr<Session> &session, const std::shared_ptr<asio::streambuf> &chunks_streambuf, unsigned long length) {
+      std::ostream tmp_stream(chunks_streambuf.get());
+      if(length > 0) {
+        std::unique_ptr<char[]> buffer(new char[length]);
+        session->response->content.read(buffer.get(), static_cast<std::streamsize>(length));
+        tmp_stream.write(buffer.get(), static_cast<std::streamsize>(length));
+        if(chunks_streambuf->size() == chunks_streambuf->max_size()) {
+          session->callback(session->connection, make_error_code::make_error_code(errc::message_size));
+          return;
+        }
+      }
+
+      // 移除 "\r\n"
+      session->response->content.get();
+      session->response->content.get();
+
+      if(length > 0)
+        read_chunked_transfer_encoded(session, chunks_streambuf);
+      else {
+        if(chunks_streambuf->size() > 0) {
+          std::ostream ostream(&session->response->streambuf);
+          ostream << chunks_streambuf.get();
+        }
+        error_code ec;
+        session->callback(session->connection, ec);
+      }
+    }
+  };
+
+  template <class socket_type>
+  class Client : public ClientBase<socket_type> {};
+
+  using HTTP = asio::ip::tcp::socket;
+
+  template <>
+  class Client<HTTP> : public ClientBase<HTTP> {
+  public:
+    Client(const std::string &server_port_path) noexcept : ClientBase<HTTP>::ClientBase(server_port_path, 80) {}
+
+  protected:
+    std::shared_ptr<Connection> create_connection() noexcept override {
+      return std::make_shared<Connection>(handler_runner, config.timeout, *io_context);
+    }
+
+    void connect(const std::shared_ptr<Session> &session) override {
+      if(!session->connection->socket->lowest_layer().is_open()) {
+        auto resolver = std::make_shared<asio::ip::tcp::resolver>(*io_context);
+        session->connection->set_timeout(config.timeout_connect);
+        resolver->async_resolve(query_host, query_service, [this, session, resolver](const error_code &ec, asio::ip::tcp::resolver::results_type results) {
+          session->connection->cancel_timeout();
+          auto lock = session->connection->handler_runner->continue_lock();
+          if(!lock)
+            return;
+          if(!ec) {
+            session->connection->set_timeout(config.timeout_connect);
+            asio::async_connect(*session->connection->socket, results, [this, session, resolver](const error_code &ec, asio::ip::tcp::endpoint /*endpoint*/) {
+              session->connection->cancel_timeout();
+              auto lock = session->connection->handler_runner->continue_lock();
+              if(!lock)
+                return;
+              if(!ec) {
+                asio::ip::tcp::no_delay option(true);
+                error_code ec;
+                session->connection->socket->set_option(option, ec);
+                this->write(session);
+              }
+              else
+                session->callback(session->connection, ec);
+            });
+          }
+          else
+            session->callback(session->connection, ec);
+        });
+      }
+      else
+        write(session);
+    }
+  };
+} // namespace gb::http
+

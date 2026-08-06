@@ -176,7 +176,7 @@ int MyApp::OnUnInit()
 
 void MyApp::test_http()
 {
-
+    http_test(client_);
 }
 
 
