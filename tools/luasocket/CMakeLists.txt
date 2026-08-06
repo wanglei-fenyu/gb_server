@@ -1,33 +1,28 @@
-cmake_minimum_required(VERSION 3.15)
-project(gbluasocket VERSION 0.1.0)
+# tools/luasocket/CMakeLists.txt
+# Subdirectory CMakeLists — relies on parent project already calling find_package(lua)
+# and providing the lua::lua target via Conan CMakeDeps.
 
-# 查找 Lua
-find_package(lua REQUIRED)
+# C standard for Lua C sources (luasocket is pure C)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
 
-# 添加头文件路径
-include_directories(${lua_INCLUDE_DIRS})
-include_directories(${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-if(UNIX)
-    add_compile_options(-fPIC)
-endif()
 add_compile_definitions(GB_LUASOCKET)
 
 # 平台特定文件
-IF(WIN32)
-    SET(PLATFORM_SPECIFIC
+if(WIN32)
+    set(PLATFORM_SPECIFIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/wsocket.h
         ${CMAKE_CURRENT_SOURCE_DIR}/src/wsocket.c
     )
-ELSEIF(UNIX)
-    SET(PLATFORM_SPECIFIC
+else()
+    set(PLATFORM_SPECIFIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src/usocket.h
         ${CMAKE_CURRENT_SOURCE_DIR}/src/usocket.c
     )
-ENDIF()
+endif()
 
 # 源文件列表
-SET(SOCKET_SOURCES
+set(SOCKET_SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/src/luasocket.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/inet.c
     ${CMAKE_CURRENT_SOURCE_DIR}/src/tcp.c
@@ -43,30 +38,39 @@ SET(SOCKET_SOURCES
 )
 
 # 创建库
-ADD_LIBRARY(gbluasocket SHARED ${SOCKET_SOURCES})
+add_library(gbluasocket SHARED ${SOCKET_SOURCES})
 
 # 设置输出名称
-SET_TARGET_PROPERTIES(gbluasocket PROPERTIES
+set_target_properties(gbluasocket PROPERTIES
     PREFIX ""
     OUTPUT_NAME "core"
+    C_STANDARD 11
+    C_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
 )
 
-# 链接 Lua
-TARGET_LINK_LIBRARIES(gbluasocket lua::lua)
+# 链接 Lua（由父项目通过 Conan 提供 lua::lua target）
+target_link_libraries(gbluasocket PRIVATE lua::lua)
 
-IF(WIN32)
-    TARGET_LINK_LIBRARIES(gbluasocket ws2_32)
-ENDIF()
+# Windows 需要 Winsock2
+if(WIN32)
+    target_link_libraries(gbluasocket PRIVATE ws2_32)
+endif()
 
-# 覆盖输出目录到 socket 子目录
+# 输出目录：匹配运行时 require("socket.core") 的查找路径
+#   Linux:   build/<config>/<config>/bin/socket/core.so
+#   Windows: build/<config>/<config>/bin/socket/core.dll
 set_target_properties(gbluasocket PROPERTIES
     RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin/socket
-    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin/socket
     ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib
 )
 
+# ALIAS target — 供 cmake/base.cmake 的 collect_dlls 查找
+add_library(gbluasocket::gbluasocket ALIAS gbluasocket)
+
 # 复制 Lua 脚本到 socket 目录
-file(GLOB LUA_SCRIPTS 
+file(GLOB LUA_SCRIPTS
     ${CMAKE_CURRENT_SOURCE_DIR}/src/*.lua
 )
 
@@ -80,26 +84,3 @@ foreach(LUA_SCRIPT ${LUA_SCRIPTS})
         COMMENT "Copying ${SCRIPT_NAME} to socket directory"
     )
 endforeach()
-
-# 将 core.so 复制到 socket 目录（Linux/Unix）
-if(UNIX)
-    add_custom_command(
-        TARGET gbluasocket POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E make_directory
-            ${CMAKE_BINARY_DIR}/$<CONFIG>/bin/socket/
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            $<TARGET_FILE:gbluasocket>
-            ${CMAKE_BINARY_DIR}/$<CONFIG>/bin/socket/
-        COMMENT "Copying core.so to socket directory"
-    )
-endif()
-
-# 安装规则
-install(TARGETS gbluasocket
-    RUNTIME DESTINATION bin/socket
-    LIBRARY DESTINATION lib
-    ARCHIVE DESTINATION lib
-)
-
-install(FILES ${CMAKE_CURRENT_SOURCE_DIR}/src/luasocket.h DESTINATION include/gbluasocket)
-install(FILES ${LUA_SCRIPTS} DESTINATION bin/socket)

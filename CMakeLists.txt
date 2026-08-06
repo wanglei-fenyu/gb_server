@@ -65,7 +65,7 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/lib)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/$<CONFIG>/bin)
 
 #tools
-#add_subdirectory(tools/luasocket)  # temporarily disabled for build verify
+add_subdirectory(tools/luasocket)
 
 #test
 add_subdirectory(test/server_test)

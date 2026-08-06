@@ -254,6 +254,8 @@ void Worker::InitLua()
 
 #if ENGINE_PLATFORM != PLATFORM_WIN32
 	_lua_socket += "?.so";
+#else
+	_lua_socket += "?.dll";
 #endif
 	std::string package_cpath = (*scriptPtr_)["package"]["cpath"].get<std::string>();
 	(*scriptPtr_)["package"]["cpath"] = package_cpath + ";" + _lua_socket;
