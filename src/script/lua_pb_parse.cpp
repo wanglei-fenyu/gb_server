@@ -9,7 +9,7 @@ void protobuf_new_table(lua_State* L, const google::protobuf::Message* msg)
 	for (int i = 0; i < des->field_count(); ++i)
 	{
 		const google::protobuf::FieldDescriptor* fd = des->field(i);
-		const std::string& key = fd->name();
+		std::string key = std::string(fd->name());
 		lua_pushstring(L, key.c_str());//key
 		if (fd->is_repeated())
 		{
@@ -46,7 +46,7 @@ void protobuf_new_table(lua_State* L, const google::protobuf::Message* msg)
 					break;
 				case google::protobuf::FieldDescriptor::CppType::CPPTYPE_STRING:
 					{
-					const std::string& str = ref->GetRepeatedString(*msg, fd, j);
+					std::string str = std::string(ref->GetRepeatedString(*msg, fd, j));
 					lua_pushstring(L, str.c_str());
 					}
 					break;
@@ -90,7 +90,7 @@ void protobuf_new_table(lua_State* L, const google::protobuf::Message* msg)
 			break;
 		case google::protobuf::FieldDescriptor::CppType::CPPTYPE_STRING:
 			{
-			const std::string& str = ref->GetString(*msg, fd);
+			std::string str = std::string(ref->GetString(*msg, fd));
 			lua_pushstring(L, str.c_str());
 			}
 			break;
@@ -139,8 +139,8 @@ void fill_lua_table(lua_State* L, int idx, google::protobuf::Message* msg)
 	for (int i = 0; i < des->field_count(); ++i)
 	{
 		const google::protobuf::FieldDescriptor* fd = des->field(i);
-		std::string fd_name = fd->name();
-		lua_getfield(L, -1, fd->name().c_str());
+		std::string fd_name = std::string(fd->name());
+		lua_getfield(L, -1, fd_name.c_str());
 		if (fd->is_repeated())
 		{
 			google::protobuf::FieldDescriptor::CppType c_type = fd->cpp_type();
@@ -240,7 +240,7 @@ void traverse_message(const google::protobuf::Message* msg)
 	const google::protobuf::Descriptor* des = msg->GetDescriptor();
 	const google::protobuf::Reflection* ref = msg->GetReflection();
 
-	std::string name = des->name();
+	std::string name = std::string(des->name());
 
 	for (int i = 0; i < des->field_count(); ++i)
 	{

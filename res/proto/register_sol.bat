@@ -1,1 +1,1 @@
-python proto_to_sol.py
+python proto_to_lua.py

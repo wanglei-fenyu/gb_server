@@ -1,5 +1,6 @@
 from conan import ConanFile
 from conan.tools.cmake import cmake_layout
+from conan.tools.files import copy as conan_copy
 
 class GBServer(ConanFile):
     name = "gbserver"
@@ -12,10 +13,10 @@ class GBServer(ConanFile):
         cmake_layout(self)
 
     def requirements(self):
-        # 其他依赖...
         self.requires("spdlog/1.15.0")
         self.requires("asio/1.38.2")
-        self.requires("protobuf/3.21.12")
+        self.requires("protobuf/6.33.5")
+        self.requires("grpc/1.82.0")
         self.requires("openssl/3.0.13")        
         self.requires("zlib/1.3.1")           
         self.requires("async_simple/1.4")
@@ -31,6 +32,13 @@ class GBServer(ConanFile):
         self.requires("catch2/3.15.0")
         self.requires("cnats/3.12.0")
         self.requires("kcp/2.1.1")
-        #self.requires("abseil/20230125.0",override=True)
-        #self.requires("grpc/1.54.3", override=True)
-        #self.requires("etcd-cpp-apiv3/0.15.4")
+        self.requires("etcd-cpp-apiv3/0.15.4")
+
+    def build_requirements(self):
+        self.tool_requires("protobuf/6.33.5")
+
+    def generate(self):
+        protobuf = self.dependencies["protobuf"]
+        if protobuf:
+            conan_copy(self, "protoc", dst=self.source_folder + "/tools", src=protobuf.package_folder + "/bin")
+            conan_copy(self, "protoc.exe", dst=self.source_folder + "/tools", src=protobuf.package_folder + "/bin")

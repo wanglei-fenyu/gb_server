@@ -43,6 +43,8 @@ macro(conan_link_libraries target_name)
         PostgreSQL::PostgreSQL
         cnats::nats_static
         hiredis::hiredis
+        etcd-cpp-apiv3::etcd-cpp-apiv3
+        grpc::grpc
     )
 
 endmacro()

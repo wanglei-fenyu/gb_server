@@ -49,6 +49,8 @@
 // Modifications by Johannes Ebke: Add ExpectAtEnd
 
 
+#include <cstdint>
+
 #include <zlib.h>
 
 #include <google/protobuf/io/zero_copy_stream.h>
@@ -59,7 +61,7 @@ namespace gb {
 
 using google::protobuf::io::ZeroCopyOutputStream;
 using google::protobuf::io::ZeroCopyInputStream;
-using google::protobuf::int64;
+typedef int64_t int64;
 
 // A ZeroCopyInputStream that reads compressed data through zlib
 class GzipInputStream : public AbstractCompressedInputStream {
