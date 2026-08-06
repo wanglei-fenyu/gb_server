@@ -1,5 +1,4 @@
 ﻿#include "test.h"
-#include "network/http/http_client.h"
 #include "network/io/message_meta.h"
 void hello(TestMsg& msg)
 {
@@ -47,15 +46,15 @@ void SendRpc(std::shared_ptr<gb::Client> client)
 
 void http_test(std::shared_ptr<gb::Client> client)
 {
-    auto& service     = client->GetIoServicePool()->GetIoService().second;
-    auto http_client = std::make_shared<gb::HttpClient>(service);
-    boost::asio::co_spawn(service, [http_client]() -> boost::asio::awaitable<void> {
-            auto res = co_await http_client->Get("http://www.baidu.com/");
-        std::cout << "Coroutine GET status: " << res.status << "\n";
-        std::cout << "Body length: " << res.body.size() << "\n";
-        std::cout << "Body: " << res.body << "\n";
-        co_return;
-    }, boost::asio::detached);
+//    auto& service     = client->GetIoServicePool()->GetIoService().second;
+//    auto http_client = std::make_shared<gb::HttpClient>(service);
+//    boost::asio::co_spawn(service, [http_client]() -> boost::asio::awaitable<void> {
+//            auto res = co_await http_client->Get("http://www.baidu.com/");
+//        std::cout << "Coroutine GET status: " << res.status << "\n";
+//        std::cout << "Body length: " << res.body.size() << "\n";
+//        std::cout << "Body: " << res.body << "\n";
+//        co_return;
+//    }, boost::asio::detached);
 }
 
 //async_simple::coro::Lazy<> test_coro(gb::SessionPtr& session)

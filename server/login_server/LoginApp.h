@@ -1,6 +1,5 @@
 #pragma once
 #include "app/server_app.h"
-#include "network/http/http_server.h"
 
 class LoginApp : public ServerApp
 {
@@ -13,5 +12,4 @@ protected:
     int OnCleanup() override;
 
 private:
-    gb::HttpServer http_server_;
 };
