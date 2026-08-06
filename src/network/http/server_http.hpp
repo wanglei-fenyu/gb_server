@@ -335,6 +335,16 @@ namespace gb::http {
     /// 如果你有自己的 asio::io_context，在运行 start() 前把指针存到这里。
     std::shared_ptr<asio::io_context> io_context;
 
+    /// 可选：外部提供的 io_context（非拥有，通常来自 IoServicePool 的 IoWorker）。
+    /// 设置后 bind() 不再自建 io_context；accept_and_run() 只做 listen + accept 即返回，
+    /// 不阻塞、不启动任何线程（io_context 由外部线程运行，生命周期与停止由外部负责）。
+    asio::io_context *external_io_context = nullptr;
+
+    /// 连接 io_context 选择器：把每个新连接分布到池中的不同 io_context
+    /// （与 TCP Listener 的 IoServicePool::GetIoService() 轮询一致）。
+    /// 为空时连接使用 acceptor 的 io_context。返回的 io_context 必须正被某个线程运行。
+    std::function<asio::io_context &()> io_context_selector;
+
     /// 如果预先知道服务器端口，请改用 start()。
     /// 返回分配的端口。若未设置 io_context，则改为创建内部 io_context。
     /// 在 accept_and_run() 之前调用。
@@ -346,8 +356,14 @@ namespace gb::http {
         endpoint = asio::ip::tcp::endpoint(asio::ip::tcp::v4(), config.port);
 
       if(!io_context) {
-        io_context = std::make_shared<asio::io_context>();
-        internal_io_context = true;
+        if(external_io_context) {
+          // 外部 io_context（不拥有）：空删除器别名，accept_and_run()/stop() 不会运行/停止它
+          io_context = std::shared_ptr<asio::io_context>(external_io_context, [](asio::io_context *) {});
+        }
+        else {
+          io_context = std::make_shared<asio::io_context>();
+          internal_io_context = true;
+        }
       }
 
       if(!acceptor)
@@ -434,6 +450,13 @@ namespace gb::http {
 
     virtual void after_bind() {}
     virtual void accept() = 0;
+
+    /// 连接应使用的 io_context：有选择器则用选择器，否则用 acceptor 的 io_context。
+    asio::io_context &connection_io_context() noexcept {
+      if(io_context_selector)
+        return io_context_selector();
+      return *io_context;
+    }
 
     template <typename... Args>
     std::shared_ptr<Connection> create_connection(Args &&... args) noexcept {
@@ -715,7 +738,7 @@ namespace gb::http {
 
   protected:
     void accept() override {
-      auto connection = create_connection(*io_context);
+      auto connection = create_connection(connection_io_context());
 
       acceptor->async_accept(*connection->socket, [this, connection](const error_code &ec) {
         auto lock = connection->handler_runner->continue_lock();

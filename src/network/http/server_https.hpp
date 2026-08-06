@@ -47,7 +47,7 @@ namespace gb::http {
     }
 
     void accept() override {
-      auto connection = create_connection(*io_context, context);
+      auto connection = create_connection(connection_io_context(), context);
 
       acceptor->async_accept(connection->socket->lowest_layer(), [this, connection](const error_code &ec) {
         auto lock = connection->handler_runner->continue_lock();
