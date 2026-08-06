@@ -40,17 +40,10 @@ namespace gb::http {
 #endif
 
 // 2017 年末 TODO：移除以下检查，始终使用 std::regex
-#ifdef USE_BOOST_REGEX
-#include <boost/regex.hpp>
-namespace gb::http {
-  namespace regex = boost;
-}
-#else
 #include <regex>
 namespace gb::http {
   namespace regex = std;
 }
-#endif
 
 namespace gb::http {
   template <class socket_type>
