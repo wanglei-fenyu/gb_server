@@ -1,12 +1,11 @@
 #pragma once
+#include "define/define.h"
 #include "db_connection.h"
 #include "db_config.h"
 #include "db_result.h"
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
 #include <libpq-fe.h>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/ip/tcp.hpp>
 #include <functional>
 #include <memory>
 #include <queue>
@@ -25,7 +24,7 @@ namespace gb
 class PgConnection final : public DbConnection
 {
 public:
-    explicit PgConnection(boost::asio::io_context& io_ctx);
+    explicit PgConnection(Asio::io_context& io_ctx);
     ~PgConnection() override;
 
     // 禁用拷贝
@@ -99,7 +98,7 @@ private:
     void ContinueOp(std::shared_ptr<AsyncOp> op);
 
     /// 将 PQsocket() 包装为 Asio tcp::socket（不转移所有权）。
-    std::shared_ptr<boost::asio::ip::tcp::socket> WrapPgSocket();
+    std::shared_ptr<Asio::ip::tcp::socket> WrapPgSocket();
 
     /// 完成当前操作，启动队列中下一个。
     void StartNext();
@@ -112,7 +111,7 @@ private:
     std::string BuildConnString(const DbConfig& cfg);
 
 private:
-    boost::asio::io_context&           io_ctx_;
+    Asio::io_context&           io_ctx_;
     PGconn*                            conn_        = nullptr;
     DbConfig                           config_;
     bool                               connected_   = false;

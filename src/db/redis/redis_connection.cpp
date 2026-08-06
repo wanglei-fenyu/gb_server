@@ -1,8 +1,8 @@
 #include "redis_connection.h"
+#include "define/define.h"
 #include "redis_value.h"
 #include "log/log.h"
 #include "async_simple/coro/FutureAwaiter.h"
-#include <boost/asio/post.hpp>
 #include <chrono>
 #include <cstdlib>
 #include <memory>
@@ -146,7 +146,7 @@ std::string ToString(const RedisValue& v)
 // 生命周期
 // ════════════════════════════════════════════════════════════════════════
 
-RedisConnection::RedisConnection(boost::asio::io_context& io_ctx)
+RedisConnection::RedisConnection(Asio::io_context& io_ctx)
     : io_ctx_(io_ctx)
     , read_descriptor_(io_ctx_)
     , write_descriptor_(io_ctx_)
@@ -159,7 +159,7 @@ RedisConnection::~RedisConnection()
     // 注意：我们不拥有 io_context，不应在析构中 join 线程或重置 work_guard。
     if (ctx_alive_ || async_ctx_ != nullptr)
     {
-        boost::asio::post(io_ctx_, [this]() {
+        Asio::post(io_ctx_, [this]() {
             ctx_alive_ = false;
             auto* ac  = async_ctx_;
             async_ctx_ = nullptr;
@@ -191,7 +191,7 @@ bool RedisConnection::Connect(const RedisConfig& cfg)
     connect_state_ = chain;
     auto fut = chain->promise.get_future();
 
-    boost::asio::post(io_ctx_, [this, chain]() { StartConnectChain(chain); });
+    Asio::post(io_ctx_, [this, chain]() { StartConnectChain(chain); });
 
     int timeout_ms = cfg.timeout_ms + 2000;
     if (fut.wait_for(std::chrono::milliseconds(timeout_ms)) == std::future_status::ready)
@@ -209,7 +209,7 @@ bool RedisConnection::Connect(const RedisConfig& cfg)
 void RedisConnection::Disconnect()
 {
     bool was_connected = connected_.exchange(false);
-    boost::asio::post(io_ctx_, [this]() { DisconnectInternal(); });
+    Asio::post(io_ctx_, [this]() { DisconnectInternal(); });
     if (was_connected)
         LOG_INFO("Redis disconnected: {}:{}", config_.host, config_.port);
 }
@@ -1097,7 +1097,7 @@ void RedisConnection::StartConnectChain(const std::shared_ptr<ConnectChain>& cha
 
 void RedisConnection::FailConnect()
 {
-    boost::asio::post(io_ctx_, [this]() {
+    Asio::post(io_ctx_, [this]() {
         if (async_ctx_)
         {
             redisAsyncFree(async_ctx_);
@@ -1180,7 +1180,7 @@ void RedisConnection::OnAddRead()
     if (!async_ctx_ || !ctx_alive_)
         return;
     read_descriptor_.async_wait(RedisIoHandle::wait_read,
-        [this](const boost::system::error_code& ec) {
+        [this](const Asio::error_code& ec) {
             if (!ec)
             {
                 redisAsyncHandleRead(async_ctx_);
@@ -1199,7 +1199,7 @@ void RedisConnection::OnAddWrite()
     if (!async_ctx_ || !ctx_alive_)
         return;
     write_descriptor_.async_wait(RedisIoHandle::wait_write,
-        [this](const boost::system::error_code& ec) {
+        [this](const Asio::error_code& ec) {
             if (!ec)
             {
                 redisAsyncHandleWrite(async_ctx_);

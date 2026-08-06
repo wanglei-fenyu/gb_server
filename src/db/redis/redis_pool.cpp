@@ -1,7 +1,7 @@
 #include "redis_pool.h"
 #include "log/log.h"
 
-RedisConnectionPool::RedisConnectionPool(boost::asio::io_context& io_ctx)
+RedisConnectionPool::RedisConnectionPool(Asio::io_context& io_ctx)
     : io_ctx_(io_ctx)
 {
 }

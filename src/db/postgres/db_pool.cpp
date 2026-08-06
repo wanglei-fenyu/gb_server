@@ -1,8 +1,8 @@
 #include "db_pool.h"
+#include "define/define.h"
 #include "pg_connection.h"
 #include "log/log.h"
 #include "async_simple/coro/FutureAwaiter.h"
-#include <boost/asio/post.hpp>
 
 namespace gb
 {
@@ -11,7 +11,7 @@ namespace gb
 // 工厂 + 生命周期
 // =========================================================================
 
-DbConnectionPool::DbConnectionPool(boost::asio::io_context& io_ctx, const DbConfig& cfg)
+DbConnectionPool::DbConnectionPool(Asio::io_context& io_ctx, const DbConfig& cfg)
     : io_ctx_(io_ctx)
     , config_(cfg)
     , db_type_(DbType::POSTGRESQL)
@@ -39,7 +39,7 @@ DbConnectionPool::~DbConnectionPool()
 }
 
 std::shared_ptr<DbConnectionPool> DbConnectionPool::Create(
-    boost::asio::io_context& io_ctx, const DbConfig& cfg)
+    Asio::io_context& io_ctx, const DbConfig& cfg)
 {
     return std::shared_ptr<DbConnectionPool>(new DbConnectionPool(io_ctx, cfg));
 }
@@ -54,7 +54,7 @@ async_simple::coro::Lazy<bool> DbConnectionPool::Start()
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         running_.store(true);
 
         // 创建初始连接
@@ -88,7 +88,7 @@ async_simple::coro::Lazy<void> DbConnectionPool::Stop()
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         running_.store(false);
 
         // 取消心跳
@@ -126,7 +126,7 @@ async_simple::coro::Lazy<DbConnectionPtr> DbConnectionPool::Acquire()
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         DoAcquire(std::move(promise));
     });
 
@@ -137,7 +137,7 @@ void DbConnectionPool::Release(DbConnectionPtr conn)
 {
     if (!conn) return;
 
-    boost::asio::post(io_ctx_, [this, conn = std::move(conn)]() mutable {
+    Asio::post(io_ctx_, [this, conn = std::move(conn)]() mutable {
         DoRelease(std::move(conn));
     });
 }
@@ -228,7 +228,7 @@ void DbConnectionPool::StartHeartbeat()
         std::bind(&DbConnectionPool::OnHeartbeat, this, std::placeholders::_1));
 }
 
-void DbConnectionPool::OnHeartbeat(const boost::system::error_code& ec)
+void DbConnectionPool::OnHeartbeat(const Asio::error_code& ec)
 {
     if (ec || !running_.load())
         return;

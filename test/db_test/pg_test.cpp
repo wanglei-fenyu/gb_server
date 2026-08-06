@@ -1,4 +1,5 @@
 #include "pg_test.h"
+#include "define/define.h"
 #include "db/postgres/pg_connection.h"
 #include "db/postgres/db_config.h"
 #include "db/postgres/db_result.h"
@@ -6,9 +7,6 @@
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
 #include "async_simple/coro/SyncAwait.h"
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/post.hpp>
-#include <boost/asio/executor_work_guard.hpp>
 #include <iostream>
 #include <string>
 #include <vector>
@@ -29,11 +27,11 @@ static gb::DbConfig DefaultPgConfig()
 
 // ── 创建一个 io_context + 线程环境 ──
 struct IoEnv {
-    boost::asio::io_context                                          io_ctx;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> guard;
+    Asio::io_context                                          io_ctx;
+    Asio::executor_work_guard<Asio::io_context::executor_type> guard;
     std::thread                                                      thread;
 
-    IoEnv() : guard(boost::asio::make_work_guard(io_ctx))
+    IoEnv() : guard(Asio::make_work_guard(io_ctx))
             , thread([this]() { io_ctx.run(); }) {}
 
     ~IoEnv() { guard.reset(); if (thread.joinable()) thread.join(); }

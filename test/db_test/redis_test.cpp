@@ -1,4 +1,5 @@
 #include "redis_test.h"
+#include "define/define.h"
 #include "db/redis/redis_connection.h"
 #include "report.h"
 #include <future>
@@ -11,23 +12,20 @@
 #include <thread>
 #include <chrono>
 #include <cmath>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/post.hpp>
-#include <boost/asio/executor_work_guard.hpp>
 
 // ── 创建默认 Redis 连接 ──
 struct IoEnv {
-    boost::asio::io_context                                        io_ctx;
-    boost::asio::executor_work_guard<boost::asio::io_context::executor_type> guard;
+    Asio::io_context                                        io_ctx;
+    Asio::executor_work_guard<Asio::io_context::executor_type> guard;
     std::thread                                                    thread;
 
-    IoEnv() : guard(boost::asio::make_work_guard(io_ctx))
+    IoEnv() : guard(Asio::make_work_guard(io_ctx))
             , thread([this]() { io_ctx.run(); }) {}
 
     ~IoEnv() { guard.reset(); if (thread.joinable()) thread.join(); }
 };
 
-static bool CreateConnection(RedisConnection& conn, boost::asio::io_context& io_ctx)
+static bool CreateConnection(RedisConnection& conn, Asio::io_context& io_ctx)
 {
     RedisConfig cfg;
     cfg.host     = "192.168.31.186";

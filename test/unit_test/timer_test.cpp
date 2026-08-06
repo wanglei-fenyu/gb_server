@@ -7,33 +7,42 @@ using namespace gb;
 
 // ── TimerManager 直接 C++ 测试 ─────────────────────────────────
 
+// 所有测试都用 shared_ptr 捕获同步对象：
+// 回调在 worker 线程异步执行，测试函数返回后栈对象已析构，
+// [&] 捕获会留下悬垂引用 → UB（worker 线程可能卡死/崩溃，污染后续测试）。
+
+struct TimerSync
+{
+    std::atomic<bool> fired{false};
+    std::atomic<int>  count{0};
+    std::atomic<bool> check_done{false};
+    std::mutex        mtx;
+    std::condition_variable cv;
+};
+
 TEST_CASE("timer: RegisterTimer one-shot fires", "[timer]")
 {
     auto worker = WorkerManager::Instance()->GetWorker(1);
     REQUIRE(worker != nullptr);
 
-    auto& timer_mgr = worker->GetTimerManager();
-    REQUIRE(timer_mgr != nullptr);
+    auto sync = std::make_shared<TimerSync>();
 
-    std::atomic<bool> fired{false};
-    std::mutex        mtx;
-    std::condition_variable cv;
-
-    worker->Post([&]() {
-        timer_mgr->RegisterTimer(50, [&]() {
-            fired.store(true);
-            std::lock_guard<std::mutex> lk(mtx);
-            cv.notify_one();
+    worker->Post([sync, worker]() {
+        auto& timer_mgr = worker->GetTimerManager();
+        timer_mgr->RegisterTimer(50, [sync]() {
+            sync->fired.store(true);
+            std::lock_guard<std::mutex> lk(sync->mtx);
+            sync->cv.notify_one();
         });
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&fired] { return fired.load(); });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->fired.load(); });
         REQUIRE(ok);
     }
-    REQUIRE(fired.load());
+    REQUIRE(sync->fired.load());
 }
 
 TEST_CASE("timer: RegisterTimer loop fires multiple times", "[timer]")
@@ -41,36 +50,36 @@ TEST_CASE("timer: RegisterTimer loop fires multiple times", "[timer]")
     auto worker = WorkerManager::Instance()->GetWorker(1);
     REQUIRE(worker != nullptr);
 
-    auto& timer_mgr = worker->GetTimerManager();
-    REQUIRE(timer_mgr != nullptr);
+    auto sync = std::make_shared<TimerSync>();
 
-    std::atomic<int>  count{0};
-    std::mutex        mtx;
-    std::condition_variable cv;
-
-    worker->Post([&]() {
-        int64_t id = timer_mgr->RegisterTimer(30, [&]() {
-            int c = ++count;
-            if (c >= 3)
-            {
-                std::lock_guard<std::mutex> lk(mtx);
-                cv.notify_one();
-            }
-        }, true);
-
-        // Cancel after 5 ticks via a one-shot timer
-        timer_mgr->RegisterTimer(500, [&, id]() {
-            timer_mgr->UnRegisterTimer(id);
-        });
+    worker->Post([sync, worker]() {
+        auto& timer_mgr = worker->GetTimerManager();
+        // id 用 shared_ptr：回调（worker 线程）里需要取消自己，
+        // Post 闭包返回后 id 本体已析构，直接捕获引用会悬垂
+        auto id_ptr = std::make_shared<int64_t>(0);
+        *id_ptr     = timer_mgr->RegisterTimer(
+            30,
+            [sync, worker, id_ptr]() {
+                int c = ++sync->count;
+                if (c >= 3)
+                {
+                    // 达标立即取消自己，避免测试结束后残留 loop timer
+                    // 继续访问已析构的同步对象（悬垂引用 → UB 污染后续测试）
+                    worker->GetTimerManager()->UnRegisterTimer(*id_ptr);
+                    std::lock_guard<std::mutex> lk(sync->mtx);
+                    sync->cv.notify_one();
+                }
+            },
+            true);
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&count] { return count.load() >= 3; });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->count.load() >= 3; });
         REQUIRE(ok);
     }
-    REQUIRE(count.load() >= 3);
+    REQUIRE(sync->count.load() >= 3);
 }
 
 TEST_CASE("timer: RegisterSystemTimer fires", "[timer]")
@@ -78,28 +87,24 @@ TEST_CASE("timer: RegisterSystemTimer fires", "[timer]")
     auto worker = WorkerManager::Instance()->GetWorker(1);
     REQUIRE(worker != nullptr);
 
-    auto& timer_mgr = worker->GetTimerManager();
-    REQUIRE(timer_mgr != nullptr);
+    auto sync = std::make_shared<TimerSync>();
 
-    std::atomic<bool> fired{false};
-    std::mutex        mtx;
-    std::condition_variable cv;
-
-    worker->Post([&]() {
-        timer_mgr->RegisterSystemTimer(50, [&]() {
-            fired.store(true);
-            std::lock_guard<std::mutex> lk(mtx);
-            cv.notify_one();
+    worker->Post([sync, worker]() {
+        auto& timer_mgr = worker->GetTimerManager();
+        timer_mgr->RegisterSystemTimer(50, [sync]() {
+            sync->fired.store(true);
+            std::lock_guard<std::mutex> lk(sync->mtx);
+            sync->cv.notify_one();
         });
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&fired] { return fired.load(); });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->fired.load(); });
         REQUIRE(ok);
     }
-    REQUIRE(fired.load());
+    REQUIRE(sync->fired.load());
 }
 
 TEST_CASE("timer: UnRegisterTimer prevents firing", "[timer]")
@@ -107,35 +112,30 @@ TEST_CASE("timer: UnRegisterTimer prevents firing", "[timer]")
     auto worker = WorkerManager::Instance()->GetWorker(1);
     REQUIRE(worker != nullptr);
 
-    auto& timer_mgr = worker->GetTimerManager();
-    REQUIRE(timer_mgr != nullptr);
+    auto sync = std::make_shared<TimerSync>();
 
-    std::atomic<bool> fired{false};
-    std::atomic<bool> check_done{false};
-    std::mutex        mtx;
-    std::condition_variable cv;
-
-    worker->Post([&]() {
-        int64_t id = timer_mgr->RegisterTimer(50, [&]() {
-            fired.store(true);  // should NOT happen
+    worker->Post([sync, worker]() {
+        auto& timer_mgr = worker->GetTimerManager();
+        int64_t id     = timer_mgr->RegisterTimer(50, [sync]() {
+            sync->fired.store(true);  // should NOT happen
         });
         timer_mgr->UnRegisterTimer(id);
 
         // After enough time, signal check_done
-        timer_mgr->RegisterTimer(300, [&]() {
-            check_done.store(true);
-            std::lock_guard<std::mutex> lk(mtx);
-            cv.notify_one();
+        timer_mgr->RegisterTimer(300, [sync]() {
+            sync->check_done.store(true);
+            std::lock_guard<std::mutex> lk(sync->mtx);
+            sync->cv.notify_one();
         });
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&check_done] { return check_done.load(); });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->check_done.load(); });
         REQUIRE(ok);
     }
-    REQUIRE_FALSE(fired.load());
+    REQUIRE_FALSE(sync->fired.load());
 }
 
 // ── Lua 绑定集成测试 ────────────────────────────────────────────
@@ -148,18 +148,16 @@ TEST_CASE("timer: Lua Register callback fires", "[timer][lua]")
     auto script = worker->GetScript();
     REQUIRE(script != nullptr);
 
-    std::atomic<bool> fired{false};
-    std::mutex        mtx;
-    std::condition_variable cv;
+    auto sync = std::make_shared<TimerSync>();
 
     // Register a Lua timer and have it signal C++ when fired
-    worker->Post([&]() {
+    worker->Post([sync, script]() {
         sol::state_view lua(script->lua_state());
         // Register a C++ callback as a lua global, timer calls it
-        lua["__timer_test_cb"] = [&]() {
-            fired.store(true);
-            std::lock_guard<std::mutex> lk(mtx);
-            cv.notify_one();
+        lua["__timer_test_cb"] = [sync]() {
+            sync->fired.store(true);
+            std::lock_guard<std::mutex> lk(sync->mtx);
+            sync->cv.notify_one();
         };
 
         lua.script(R"(
@@ -170,12 +168,12 @@ TEST_CASE("timer: Lua Register callback fires", "[timer][lua]")
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&fired] { return fired.load(); });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->fired.load(); });
         REQUIRE(ok);
     }
-    REQUIRE(fired.load());
+    REQUIRE(sync->fired.load());
 }
 
 TEST_CASE("timer: Lua Register loop & cancel", "[timer][lua]")
@@ -186,41 +184,47 @@ TEST_CASE("timer: Lua Register loop & cancel", "[timer][lua]")
     auto script = worker->GetScript();
     REQUIRE(script != nullptr);
 
-    std::atomic<int>  count{0};
-    std::mutex        mtx;
-    std::condition_variable cv;
+    auto sync = std::make_shared<TimerSync>();
 
-    worker->Post([&]() {
+    worker->Post([sync, script]() {
         sol::state_view lua(script->lua_state());
 
-        lua["__timer_loop_cb"] = [&]() {
-            int c = ++count;
+        lua["__timer_loop_cb"] = [sync, script]() {
+            int c = ++sync->count;
             if (c >= 3)
             {
-                std::lock_guard<std::mutex> lk(mtx);
-                cv.notify_one();
+                // 达标后在 worker 线程内取消 Lua loop timer，防止测试结束后
+                // 残留 loop timer 继续访问已析构的同步对象
+                sol::state_view lua_view(script->lua_state());
+                lua_view["__timer_loop_cancel"]();
+                std::lock_guard<std::mutex> lk(sync->mtx);
+                sync->cv.notify_one();
             }
         };
 
         lua.script(R"(
-            local id = timer.Register(30, function()
+            local loop_id = timer.Register(30, function()
                 __timer_loop_cb()
             end, true)
 
-            -- Cancel after enough time
-            timer.Register(500, function()
-                timer.UnRegister(id)
+            __timer_loop_cancel = function()
+                timer.UnRegister(loop_id)
+            end
+
+            -- 兜底：即使 count 未达标，300ms 后也取消
+            timer.Register(300, function()
+                timer.UnRegister(loop_id)
             end, false)
         )");
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&count] { return count.load() >= 3; });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->count.load() >= 3; });
         REQUIRE(ok);
     }
-    REQUIRE(count.load() >= 3);
+    REQUIRE(sync->count.load() >= 3);
 }
 
 TEST_CASE("timer: Lua Register & UnRegister prevents firing", "[timer][lua]")
@@ -231,19 +235,16 @@ TEST_CASE("timer: Lua Register & UnRegister prevents firing", "[timer][lua]")
     auto script = worker->GetScript();
     REQUIRE(script != nullptr);
 
-    std::atomic<bool> bad_fired{false};
-    std::atomic<bool> check_done{false};
-    std::mutex        mtx;
-    std::condition_variable cv;
+    auto sync = std::make_shared<TimerSync>();
 
-    worker->Post([&]() {
+    worker->Post([sync, script]() {
         sol::state_view lua(script->lua_state());
 
-        lua["__timer_bad_cb"]  = [&]() { bad_fired.store(true); };
-        lua["__timer_done_cb"] = [&]() {
-            check_done.store(true);
-            std::lock_guard<std::mutex> lk(mtx);
-            cv.notify_one();
+        lua["__timer_bad_cb"]  = [sync]() { sync->fired.store(true); };
+        lua["__timer_done_cb"] = [sync]() {
+            sync->check_done.store(true);
+            std::lock_guard<std::mutex> lk(sync->mtx);
+            sync->cv.notify_one();
         };
 
         lua.script(R"(
@@ -260,10 +261,10 @@ TEST_CASE("timer: Lua Register & UnRegister prevents firing", "[timer][lua]")
     });
 
     {
-        std::unique_lock<std::mutex> lk(mtx);
-        bool ok = cv.wait_for(lk, std::chrono::seconds(3),
-                              [&check_done] { return check_done.load(); });
+        std::unique_lock<std::mutex> lk(sync->mtx);
+        bool ok = sync->cv.wait_for(lk, std::chrono::seconds(3),
+                                    [sync] { return sync->check_done.load(); });
         REQUIRE(ok);
     }
-    REQUIRE_FALSE(bad_fired.load());
+    REQUIRE_FALSE(sync->fired.load());
 }

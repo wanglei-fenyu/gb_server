@@ -52,7 +52,7 @@ start_process.bat -s scene -t Debug
 | `gcc_debug_pr` | GCC | Linux Debug |
 | `gcc_release_pr` | GCC | Linux Release |
 
-**Common profile settings**: `boost/*:without_cobalt=True`, `BOOST_CHARCONV_DISABLE_FLOAT128`, `protobuf/*:shared=False`.
+**Common profile settings**: `protobuf/*:shared=False`.
 
 ### CMake target pattern
 
@@ -88,7 +88,7 @@ server/scene_server/main.cpp  ← scene server (SceneApp extends ServerApp)
        │    └─ IWorkerLogic interface (OnStartup/OnUpdate/OnTick/OnCleanup)
        ├─ NetworkManager (singleton)  ← message dispatch, RPC registry
        │    ├─ Router → dispatches to workers by ServiceWorkerType
-       │    ├─ gbnet Server/Listener/Session  ← TCP network layer
+       │    ├─ gbnet Server/Listener/Session  ← TCP network layer (gbnet removed, now custom kcp_listener + message_stream)
        │    ├─ RPC system (msgpack + protobuf + coroutine via async_simple)
        │    ├─ ThreadLocalRpcContext (per-thread RPC pending map)
        │    └─ IoServicePool → N io_service threads
@@ -167,8 +167,10 @@ Server presets in `start_process.bat`: login=8, scene=32, gateway=64.
 
 | Library | Version | Purpose |
 |---|---|---|
-| gbnet | 0.1.0 (GitHub: wanglei-fenyu/gbnet_conan) | Custom TCP networking |
-| Boost | 1.90.0 | charconv, Asio (standalone) |
+| Dependency | Version | Purpose |
+|---|---|---|
+| asio | 1.38.2 | Standalone networking (replaced Boost.Asio + gbnet) |
+| asio | 1.38.2 | Standalone networking (replaced Boost.Asio + gbnet) |
 | OpenSSL | 3.0.13 | SSL/TLS for HTTPS |
 | ZLIB | 1.3.1 | Compression |
 | spdlog | 1.15.0 | Logging |
@@ -183,11 +185,11 @@ Server presets in `start_process.bat`: login=8, scene=32, gateway=64.
 | cxxopts | 3.3.1 | CLI option parsing |
 | libpq | 17.7 | PostgreSQL client library (Lua binding) |
 
-**gbnet** is a custom dependency hosted at `https://github.com/wanglei-fenyu/gbnet_conan.git`. It provides `MessageStream`, `Buffer`, `CompressedStream`, and IO primitives. Also managed via `3rd/packages.json`.
+**gbnet** was a custom dependency hosted at `https://github.com/wanglei-fenyu/gbnet_conan.git`. It provided `MessageStream`, `Buffer`, `CompressedStream`, and IO primitives. It has been removed; the project now uses a custom `kcp_listener` + `message_stream` built on standalone Asio. Also managed via `3rd/packages.json`.
 
 ### 3rd-party bootstrap (`3rd/`)
 
-Contains `packages.json` (currently only gbnet), `setup.py`/`setup.bat`/`setup.sh` for non-Conan package management (e.g. cloning gbnet from git).
+Contains `packages.json` (currently empty), `setup.py`/`setup.bat`/`setup.sh` for non-Conan package management.
 
 ## Source file organisation
 
@@ -598,7 +600,7 @@ Each Worker has its own `TimerManager` with **dual priority queues** (min-heaps)
 
 ## Common gotchas
 
-1. **Conan + Boost 1.90 bug**: Use a profile with `boost/*:without_cobalt=True` and `BOOST_CHARCONV_DISABLE_FLOAT128`.
+1. **protobuf DLL on Windows**: `PROTOBUF_USE_DLLS` macro required per-target. DLL copy logic in `cmake/base.cmake`.
 2. **protobuf DLL on Windows**: `PROTOBUF_USE_DLLS` macro required per-target. DLL copy logic in `cmake/base.cmake`.
 3. **VS2026 environment**: Visual Studio 2026 is not in PATH by default. Run from "Command Prompt for VS".
 4. **CMake presets are Conan-generated**: presets won't exist until after `conan install`.

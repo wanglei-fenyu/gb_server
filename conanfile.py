@@ -14,7 +14,7 @@ class GBServer(ConanFile):
     def requirements(self):
         # 其他依赖...
         self.requires("spdlog/1.15.0")
-        self.requires("boost/1.90.0")
+        self.requires("asio/1.38.2")
         self.requires("protobuf/3.21.12")
         self.requires("openssl/3.0.13")        
         self.requires("zlib/1.3.1")           

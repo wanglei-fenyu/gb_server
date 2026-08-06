@@ -7,13 +7,8 @@ compiler.runtime=dynamic
 compiler.version=195
 os=Windows
 
-[options]
-boost/*:without_cobalt=True
-boost/*:without_process=True
-
 [conf]
 tools.microsoft.msbuild:installation_path=C:/Program Files/Microsoft Visual Studio/18/Community
-tools.build:cxxflags+=["/DBOOST_CHARCONV_DISABLE_FLOAT128"]
 tools.build:skip_test=True
 tools.build:jobs=8
 tools.cmake.cmaketoolchain:generator=Ninja

@@ -466,9 +466,10 @@ TEST_CASE("msgpack: 解包截断数据产生错误", "[msgpack][errors]")
 // ============================================================
 TEST_CASE("msgpack: 小整数使用更紧凑的编码格式", "[msgpack][encoding]")
 {
-    // int32_t 0 → packs as int8 (2 bytes: 0xd0 + 0x00)
+    // int32_t 0 → positive fixint（1 字节：0x00），msgpack 规范最紧凑编码
     auto small = gb::msgpack::pack(int32_t{0});
-    CHECK(small.size() == 2);
+    CHECK(small.size() == 1);
+    CHECK(small[0] == 0x00);
 
     // int32_t 20000 → larger than int8, uses int16 (3 bytes: 0xd1 + 2 bytes)
     auto medium = gb::msgpack::pack(int32_t{20000});
@@ -489,13 +490,13 @@ TEST_CASE("msgpack: 小整数使用更紧凑的编码格式", "[msgpack][encodin
 
 TEST_CASE("msgpack: 整数值的 float/double 编码为整数类型", "[msgpack][encoding]")
 {
-    // float 42.0 → packs as int8 (downcast chain: int32 → int16 → int8)
+    // float 42.0 → 整数值，走 int32 downcast → positive fixint（1 字节，格式即值 42）
     auto f = gb::msgpack::pack(42.0f);
-    CHECK(f[0] == (uint8_t)gb::msgpack::format_t::int8);
+    CHECK(f[0] == (uint8_t)42);
 
-    // double 3.0 → packs as int8
+    // double 3.0 → positive fixint（1 字节，格式即值 3）
     auto d = gb::msgpack::pack(3.0);
-    CHECK(d[0] == (uint8_t)gb::msgpack::format_t::int8);
+    CHECK(d[0] == (uint8_t)3);
 
     // double 1e12 → larger than int32 range → packs as int64
     auto big = gb::msgpack::pack(1.0e12);

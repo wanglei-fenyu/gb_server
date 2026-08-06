@@ -20,7 +20,7 @@ public:
     struct TimerHandle : public std::enable_shared_from_this<TimerHandle>
     {
         IoService* ios{nullptr};
-        mutable boost::asio::steady_timer timer;
+        mutable Asio::steady_timer timer;
         size_t id{0};
 
         explicit TimerHandle(IoService& ioservice, size_t i)

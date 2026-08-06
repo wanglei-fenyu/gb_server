@@ -14,11 +14,7 @@ if(MSVC)
 endif()
 
 add_definitions(-DPROTOBUF_USE_DLLS)
-add_compile_definitions(BOOST_ASIO_HAS_STD_THREAD)
 
-target_compile_definitions(${TARGET_NAME} PRIVATE
-    BOOST_CHARCONV_DISABLE_FLOAT128
-)
 
 if(NOT COMMON_CPP_DIR)
     set(COMMON_CPP_DIR ${CMAKE_SOURCE_DIR}/src)

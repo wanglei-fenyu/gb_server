@@ -1,10 +1,10 @@
 #include "register_postgresql.h"
+#include "define/define.h"
 #include "pg_connection.h"          // PgConnection（异步回调 API）
 #include "db_config.h"              // DbConfig
 #include "worker/worker_manager.h"
 #include "script/script.h"          // Script（用于 lua_xmove 迁移到主状态）
 #include "log/log.h"
-#include <boost/asio/executor_work_guard.hpp>
 #include <mutex>
 #include <thread>
 
@@ -15,10 +15,10 @@
 namespace {
 
 /// 全局 PG IO 上下文（供 Lua 全局连接使用）。
-boost::asio::io_context g_pg_io_ctx;
+Asio::io_context g_pg_io_ctx;
 /// work_guard 防止 io_context::run() 在无待处理事件时退出。
 /// 若无此 guard，g_pg_io_thread 启动后立即退出 → AsyncConnect 等 post 的事件永不执行。
-using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
+using WorkGuard = Asio::executor_work_guard<Asio::io_context::executor_type>;
 std::unique_ptr<WorkGuard> g_pg_work_guard;
 std::thread             g_pg_io_thread;
 bool                    g_pg_thread_started = false;
@@ -169,7 +169,7 @@ void register_postgresql(std::shared_ptr<Script>& scriptPtr)
     {
         g_pg_thread_started = true;
         g_pg_work_guard = std::make_unique<WorkGuard>(
-            boost::asio::make_work_guard(g_pg_io_ctx));
+            Asio::make_work_guard(g_pg_io_ctx));
         g_pg_io_thread = std::thread([]() { g_pg_io_ctx.run(); });
         g_pg_io_thread.detach();
     }

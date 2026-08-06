@@ -2,7 +2,7 @@
 #include "define/define.h"
 #include <chrono>
 
-#if USE_STANDALONE_ASIO
+#ifdef USE_STANDALONE_ASIO
 
 #	define CHRONO_SECOND(std_duration) std::chrono::duration_cast<std::chrono::seconds>(std_duration)
 #   define CHRONO_MICROSECONDS(std_duration) std::chrono::duration_cast<std::chrono::microseconds>(std_duration)

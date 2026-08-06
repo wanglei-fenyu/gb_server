@@ -4,13 +4,13 @@
 #include "def.h"
 #include "../log/net_log_help.h"
 
-#if USE_STANDALONE_ASIO
+#ifdef USE_STANDALONE_ASIO
 #    include <functional>
+#    include <asio.hpp>
 #    include <asio/ssl.hpp>
 #    define asio_bind std::bind
-#    include <asio/asio.hpp>
-	 namespace Asio = asio;
-	 namespace ec   = asio;
+    namespace Asio = asio;
+    namespace ec   = asio;
 #    define _(i)      std::placeholders::_##i
 
 #else

@@ -1,9 +1,8 @@
 #include "pg_connection.h"
+#include "define/define.h"
 #include "log/log.h"
 #include "async_simple/coro/FutureAwaiter.h"
 #include <libpq-fe.h>
-#include <boost/asio/post.hpp>
-#include <boost/system/error_code.hpp>
 #include <cstring>
 #include <sstream>
 
@@ -31,7 +30,7 @@ using AsyncOpCallback = std::function<void(DbResult)>;
 // 构造 / 析构
 // =========================================================================
 
-PgConnection::PgConnection(boost::asio::io_context& io_ctx)
+PgConnection::PgConnection(Asio::io_context& io_ctx)
     : io_ctx_(io_ctx)
 {
 }
@@ -107,8 +106,8 @@ void PgConnection::ContinueOp(std::shared_ptr<AsyncOp> op)
                 StartNext();
                 return;
             }
-            sock->async_wait(boost::asio::ip::tcp::socket::wait_write,
-                [this, self, sock, op](const boost::system::error_code& ec) mutable {
+            sock->async_wait(Asio::ip::tcp::socket::wait_write,
+                [this, self, sock, op](const Asio::error_code& ec) mutable {
                     sock->release();
                     if (ec) {
                         op->callback(DbResult::Error(
@@ -139,8 +138,8 @@ void PgConnection::ContinueOp(std::shared_ptr<AsyncOp> op)
             StartNext();
             return;
         }
-        sock->async_wait(boost::asio::ip::tcp::socket::wait_read,
-            [this, self, sock, op](const boost::system::error_code& ec) mutable {
+        sock->async_wait(Asio::ip::tcp::socket::wait_read,
+            [this, self, sock, op](const Asio::error_code& ec) mutable {
                 sock->release();
                 if (ec) {
                     op->callback(DbResult::Error(
@@ -171,14 +170,14 @@ void PgConnection::ContinueOp(std::shared_ptr<AsyncOp> op)
     StartNext();
 }
 
-std::shared_ptr<boost::asio::ip::tcp::socket> PgConnection::WrapPgSocket()
+std::shared_ptr<Asio::ip::tcp::socket> PgConnection::WrapPgSocket()
 {
-    auto sock    = std::make_shared<boost::asio::ip::tcp::socket>(io_ctx_);
+    auto sock    = std::make_shared<Asio::ip::tcp::socket>(io_ctx_);
     int pg_sock = PQsocket(conn_);
     if (pg_sock == -1)
         return nullptr;
-    sock->assign(boost::asio::ip::tcp::v4(),
-        static_cast<boost::asio::ip::tcp::socket::native_handle_type>(pg_sock));
+    sock->assign(Asio::ip::tcp::v4(),
+        static_cast<Asio::ip::tcp::socket::native_handle_type>(pg_sock));
     return sock;
 }
 
@@ -228,7 +227,7 @@ async_simple::coro::Lazy<bool> PgConnection::Connect(const DbConfig& cfg)
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, cfg,
+    Asio::post(io_ctx_, [this, self, cfg,
                                 promise = std::move(promise)]() mutable {
         promise.setValue(ConnectSync(cfg));
     });
@@ -242,7 +241,7 @@ async_simple::coro::Lazy<void> PgConnection::Close()
     auto future = promise.getFuture();
 
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         CloseSync();
         promise.setValue();
     });
@@ -264,7 +263,7 @@ async_simple::coro::Lazy<bool> PgConnection::Reset()
 
     auto self = shared_from_this();
     auto cfg = config_;
-    boost::asio::post(io_ctx_, [this, self, cfg,
+    Asio::post(io_ctx_, [this, self, cfg,
                                 promise = std::move(promise)]() mutable {
         CloseSync();
         promise.setValue(ConnectSync(cfg));
@@ -284,7 +283,7 @@ async_simple::coro::Lazy<DbResult> PgConnection::Query(std::string_view sql)
 
     auto self = shared_from_this();
     std::string sql_str(sql);
-    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+    Asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 promise = std::move(promise)]() mutable {
         StartSend(
             [sql = std::move(sql)](PGconn* conn) -> bool {
@@ -309,7 +308,7 @@ async_simple::coro::Lazy<DbResult> PgConnection::Query(
     auto sql_str = std::make_shared<std::string>(sql);
     auto params_copy = std::make_shared<std::vector<DbValue>>(params);
 
-    boost::asio::post(io_ctx_, [this, self, sql_str, params_copy,
+    Asio::post(io_ctx_, [this, self, sql_str, params_copy,
                                 promise = std::move(promise)]() mutable {
         // 将 DbValue 转换为 libpq 参数
         std::vector<const char*> values;
@@ -392,7 +391,7 @@ async_simple::coro::Lazy<uint64_t> PgConnection::Execute(std::string_view sql)
 
     auto self = shared_from_this();
     std::string sql_str(sql);
-    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+    Asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 promise = std::move(promise)]() mutable {
         StartSend(
             [sql = std::move(sql)](PGconn* conn) -> bool {
@@ -417,7 +416,7 @@ async_simple::coro::Lazy<void> PgConnection::Begin()
     auto future = promise.getFuture();
     auto self = shared_from_this();
 
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         StartSend(
             [](PGconn* conn) -> bool {
                 return PQsendQuery(conn, "BEGIN") == 1;
@@ -436,7 +435,7 @@ async_simple::coro::Lazy<void> PgConnection::Commit()
     auto future = promise.getFuture();
     auto self = shared_from_this();
 
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         StartSend(
             [](PGconn* conn) -> bool {
                 return PQsendQuery(conn, "COMMIT") == 1;
@@ -455,7 +454,7 @@ async_simple::coro::Lazy<void> PgConnection::Rollback()
     auto future = promise.getFuture();
     auto self = shared_from_this();
 
-    boost::asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
+    Asio::post(io_ctx_, [this, self, promise = std::move(promise)]() mutable {
         StartSend(
             [](PGconn* conn) -> bool {
                 return PQsendQuery(conn, "ROLLBACK") == 1;
@@ -475,7 +474,7 @@ async_simple::coro::Lazy<void> PgConnection::Rollback()
 void PgConnection::AsyncConnect(const DbConfig& cfg, std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, cfg, cb = std::move(callback)]() mutable {
+    Asio::post(io_ctx_, [this, self, cfg, cb = std::move(callback)]() mutable {
         cb(ConnectSync(cfg));
     });
 }
@@ -483,7 +482,7 @@ void PgConnection::AsyncConnect(const DbConfig& cfg, std::function<void(bool)> c
 void PgConnection::AsyncClose(std::function<void()> callback)
 {
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+    Asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
         CloseSync();
         cb();
     });
@@ -493,7 +492,7 @@ void PgConnection::AsyncQuery(std::string_view sql, std::function<void(DbResult)
 {
     auto self = shared_from_this();
     std::string sql_str(sql);
-    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+    Asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 cb = std::move(callback)]() mutable {
         StartSend(
             [sql = std::move(sql)](PGconn* conn) -> bool {
@@ -512,7 +511,7 @@ void PgConnection::AsyncQuery(std::string_view sql, const std::vector<DbValue>& 
     auto sql_str  = std::make_shared<std::string>(sql);
     auto params_copy = std::make_shared<std::vector<DbValue>>(params);
 
-    boost::asio::post(io_ctx_, [this, self, sql_str, params_copy,
+    Asio::post(io_ctx_, [this, self, sql_str, params_copy,
                                 cb = std::move(callback)]() mutable {
         // 转换参数
         std::vector<const char*> values;
@@ -588,7 +587,7 @@ void PgConnection::AsyncExecute(std::string_view sql, std::function<void(uint64_
 {
     auto self = shared_from_this();
     std::string sql_str(sql);
-    boost::asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
+    Asio::post(io_ctx_, [this, self, sql = std::move(sql_str),
                                 cb = std::move(callback)]() mutable {
         StartSend(
             [sql = std::move(sql)](PGconn* conn) -> bool {
@@ -603,7 +602,7 @@ void PgConnection::AsyncExecute(std::string_view sql, std::function<void(uint64_
 void PgConnection::AsyncBegin(std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+    Asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
         StartSend(
             [](PGconn* conn) -> bool {
                 return PQsendQuery(conn, "BEGIN") == 1;
@@ -617,7 +616,7 @@ void PgConnection::AsyncBegin(std::function<void(bool)> callback)
 void PgConnection::AsyncCommit(std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+    Asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
         StartSend(
             [](PGconn* conn) -> bool {
                 return PQsendQuery(conn, "COMMIT") == 1;
@@ -631,7 +630,7 @@ void PgConnection::AsyncCommit(std::function<void(bool)> callback)
 void PgConnection::AsyncRollback(std::function<void(bool)> callback)
 {
     auto self = shared_from_this();
-    boost::asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
+    Asio::post(io_ctx_, [this, self, cb = std::move(callback)]() mutable {
         StartSend(
             [](PGconn* conn) -> bool {
                 return PQsendQuery(conn, "ROLLBACK") == 1;

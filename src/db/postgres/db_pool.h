@@ -1,11 +1,11 @@
 #pragma once
+#include "define/define.h"
 #include "db_connection.h"
 #include "db_config.h"
 #include "async_simple/coro/Lazy.h"
 #include "async_simple/Future.h"
 #include "async_simple/Promise.h"
 #include <concurrentqueue.h>
-#include <boost/asio/steady_timer.hpp>
 #include <memory>
 #include <vector>
 
@@ -33,7 +33,7 @@ public:
     /// @param io_ctx  连接池使用的 IO 上下文（应独占一个线程）。
     /// @param cfg     连接配置（含连接池大小参数）。
     static std::shared_ptr<DbConnectionPool> Create(
-        boost::asio::io_context& io_ctx, const DbConfig& cfg);
+        Asio::io_context& io_ctx, const DbConfig& cfg);
 
     ~DbConnectionPool();
 
@@ -65,7 +65,7 @@ public:
     bool   IsRunning()      const noexcept { return running_.load(); }
 
 private:
-    DbConnectionPool(boost::asio::io_context& io_ctx, const DbConfig& cfg);
+    DbConnectionPool(Asio::io_context& io_ctx, const DbConfig& cfg);
 
     // ── 内部（所有方法在 IO 线程上串行执行） ──────────────────────────────
 
@@ -80,10 +80,10 @@ private:
 
     /// 心跳检查。
     void StartHeartbeat();
-    void OnHeartbeat(const boost::system::error_code& ec);
+    void OnHeartbeat(const Asio::error_code& ec);
 
 private:
-    boost::asio::io_context&     io_ctx_;
+    Asio::io_context&     io_ctx_;
 
     DbConfig                     config_;
     DbType                       db_type_;
@@ -102,7 +102,7 @@ private:
     moodycamel::ConcurrentQueue<Waiter> waiters_;
 
     // ── 心跳 ──
-    boost::asio::steady_timer    heartbeat_timer_;
+    Asio::steady_timer    heartbeat_timer_;
     static constexpr int         HEARTBEAT_INTERVAL_SEC = 30;
 };
 

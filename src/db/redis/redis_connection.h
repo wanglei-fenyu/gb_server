@@ -1,11 +1,10 @@
 #pragma once
+#include "define/define.h"
 #include "redis_config.h"
 #include "redis_value.h"
 #include "log/log.h"
 #include <hiredis/hiredis.h>
 #include <hiredis/async.h>
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/post.hpp>
 #include <memory>
 #include <atomic>
 #include <string>
@@ -22,18 +21,16 @@
 //   Windows：boost::asio 不提供 posix 命名空间，等价物为 ip::tcp::socket
 //   （assign 原生句柄 + async_wait，内部走 select reactor）。
 #if defined(_WIN32)
-    #include <boost/asio/ip/tcp.hpp>
-    using RedisIoHandle = boost::asio::ip::tcp::socket;
+    using RedisIoHandle = Asio::ip::tcp::socket;
 #else
-    #include <boost/asio/posix/stream_descriptor.hpp>
-    using RedisIoHandle = boost::asio::posix::stream_descriptor;
+    using RedisIoHandle = Asio::posix::stream_descriptor;
 #endif
 
 /// 将 hiredis 的 socket fd 绑定到 asio IO 句柄（平台差异封装）。
 inline void RedisAssignHandle(RedisIoHandle& h, int fd)
 {
 #if defined(_WIN32)
-    h.assign(boost::asio::ip::tcp::v4(),
+    h.assign(Asio::ip::tcp::v4(),
              static_cast<RedisIoHandle::native_handle_type>(fd));
 #else
     h.assign(fd);
@@ -59,7 +56,7 @@ inline void RedisAssignHandle(RedisIoHandle& h, int fd)
 class RedisConnection
 {
 public:
-    explicit RedisConnection(boost::asio::io_context& io_ctx);
+    explicit RedisConnection(Asio::io_context& io_ctx);
     ~RedisConnection();
 
     RedisConnection(const RedisConnection&) = delete;
@@ -77,7 +74,7 @@ public:
     const RedisConfig& GetConfig() const { return config_; }
 
     /// 获取 io_context（用于投递异步任务）。
-    boost::asio::io_context& GetIoContext() { return io_ctx_; }
+    Asio::io_context& GetIoContext() { return io_ctx_; }
 
     // ════════════════════════════════════════════════════════════════════════
     // 异步回调接口
@@ -259,7 +256,7 @@ private:
     void DisconnectInternal();
 
 private:
-    boost::asio::io_context&                                        io_ctx_;
+    Asio::io_context&                                        io_ctx_;
     redisAsyncContext*                                                async_ctx_{nullptr};
     RedisIoHandle                                                     read_descriptor_;
     RedisIoHandle                                                     write_descriptor_;

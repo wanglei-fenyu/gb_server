@@ -18,7 +18,7 @@ endif()
 
 
 # 查找所有 Conan 依赖包（全局，子目录共享）
-find_package(Boost REQUIRED COMPONENTS charconv)
+find_package(asio CONFIG REQUIRED)
 find_package(spdlog REQUIRED)
 find_package(protobuf REQUIRED)
 find_package(OpenSSL REQUIRED)
@@ -53,9 +53,8 @@ endif()
 # 定义全局编译宏
 add_compile_definitions(
     # PROTOBUF_USE_DLLS  # 静态链接 protobuf 时不需要
-    BOOST_ASIO_HAS_STD_THREAD
-    BOOST_CHARCONV_DISABLE_FLOAT128
-    BOOST_BIND_GLOBAL_PLACEHOLDERS
+    USE_STANDALONE_ASIO
+    ASIO_STANDALONE
 )
 
 # 设置静态库和动态库的输出目录

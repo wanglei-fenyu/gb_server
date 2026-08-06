@@ -30,12 +30,12 @@ RpcTimerPool::TimerHandlePtr RpcTimerPool::Acquire(IoService& ios)
     else
     {
         // 重置 timer 到新的 io_service（使用宏获取真实类型名）
-#if USE_STANDALONE_ASIO
+#ifdef USE_STANDALONE_ASIO
         handle->timer.~basic_waitable_timer<std::chrono::steady_clock>();
 #else
-        handle->timer.~basic_waitable_timer<boost::asio::steady_timer::clock_type>();
+        handle->timer.~basic_waitable_timer<Asio::steady_timer::clock_type>();
 #endif
-        new (&handle->timer) boost::asio::steady_timer(ios);
+        new (&handle->timer) Asio::steady_timer(ios);
         handle->ios = &ios;
         handle->id = next_id_++;
     }

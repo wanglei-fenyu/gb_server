@@ -1,10 +1,9 @@
 #include "redis_connection.h"
+#include "define/define.h"
 #include "register_redis.h"
 #include "redis_pool.h"
 #include "worker/worker_manager.h"
 #include "log/log.h"
-#include <boost/asio/io_context.hpp>
-#include <boost/asio/executor_work_guard.hpp>
 #include <mutex>
 #include <thread>
 
@@ -17,8 +16,8 @@
 
 namespace {
 
-boost::asio::io_context            g_redis_io_ctx;
-using WorkGuard = boost::asio::executor_work_guard<boost::asio::io_context::executor_type>;
+Asio::io_context            g_redis_io_ctx;
+using WorkGuard = Asio::executor_work_guard<Asio::io_context::executor_type>;
 std::unique_ptr<WorkGuard>         g_redis_work_guard;
 std::thread                        g_redis_io_thread;
 bool                               g_redis_thread_started = false;
@@ -50,7 +49,7 @@ static void EnsureRedisIoThread()
     {
         g_redis_thread_started = true;
         g_redis_work_guard = std::make_unique<WorkGuard>(
-            boost::asio::make_work_guard(g_redis_io_ctx));
+            Asio::make_work_guard(g_redis_io_ctx));
         g_redis_io_thread = std::thread([]() { g_redis_io_ctx.run(); });
         g_redis_io_thread.detach();
     }

@@ -7,10 +7,6 @@ compiler.libcxx=libstdc++11
 compiler.version=16.0
 os=Linux
 
-[options]
-boost/*:without_cobalt=True
-
 [conf]
-tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]
 tools.build:skip_test=True
 tools.build:jobs=8

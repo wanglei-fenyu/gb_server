@@ -14,11 +14,7 @@ endif()
 
 # ========== 编译宏定义 ==========
 add_definitions(-DPROTOBUF_USE_DLLS)
-add_compile_definitions(BOOST_ASIO_HAS_STD_THREAD)
 
-target_compile_definitions(${TARGET_NAME} PRIVATE
-    BOOST_CHARCONV_DISABLE_FLOAT128
-)
 
 # ========== 收集公共源码（src 目录）==========
 if(NOT COMMON_CPP_DIR)

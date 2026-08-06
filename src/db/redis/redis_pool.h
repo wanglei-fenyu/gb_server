@@ -1,7 +1,7 @@
 #pragma once
+#include "define/define.h"
 #include "redis_config.h"
 #include "redis_connection.h"
-#include <boost/asio/io_context.hpp>
 #include <memory>
 #include <vector>
 #include <atomic>
@@ -22,7 +22,7 @@
 class RedisConnectionPool
 {
 public:
-    explicit RedisConnectionPool(boost::asio::io_context& io_ctx);
+    explicit RedisConnectionPool(Asio::io_context& io_ctx);
     ~RedisConnectionPool();
 
     // 禁用拷贝
@@ -50,7 +50,7 @@ public:
     int CountHealthy() const;
 
 private:
-    boost::asio::io_context&                           io_ctx_;
+    Asio::io_context&                           io_ctx_;
     std::vector<std::unique_ptr<RedisConnection>> connections_;
     std::atomic<size_t>                           next_index_{0};
     RedisConfig                                   config_;
