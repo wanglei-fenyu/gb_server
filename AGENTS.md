@@ -209,18 +209,20 @@ src/
     timer_help.h     — CHRONO_SECOND/MICROSECOND macros (Asio compat)
     util_string.h    — string format, trim, replace, split
   db/
-    redis/           — Redis connection pool + Lua binding (Boost.Redis)
+    redis/           — Redis connection pool + Lua binding (hiredis)
     postgres/        — PostgreSQL connection + Lua binding (libpq)
   log/
     log.h/.cpp       — GbLog (spdlog wrapper), LOG_* macros, CHECK macros
   network/
     http/            — HTTP client/server
       http_common.h         — HttpRequest, HttpResponse, HttpRequestHandler
-      http_server.h/.cpp    — HttpServer (Boost.Beast, route registration, SSL)
+      http_server.h/.cpp    — HttpServer (standalone Asio, route registration, SSL)
       http_server_internal.h— Dispatch logic, route matching
       http_session.h/.cpp   — HttpSession (plain HTTP session)
       https_session.h/.cpp  — HttpsSession (SSL/TLS session)
-      http_client.h/.cpp    — HttpClient (coroutine + callback API)
+      http_client.h/.cpp    — HttpClient (callback + sync + coroutine API)
+      http_coro.h            — Coroutine support (HttpAwaitState, HttpCallAwaiter)
+      client_https.hpp       — HttpsClient (same coroutine API)
     io/              — New dir: network IO layer (was net/ + session/ + io_service_pool/ + timer_worker/)
       server.h/.cpp         — Server, ServerImpl (TCP server wrapper)
       client.h/.cpp         — Client, ClientImpl (TCP client wrapper)
@@ -497,7 +499,7 @@ enum MessageType : uint32_t {
 
 ### HTTP routing (independent)
 
-HttpServer uses **exact string path matching** via Boost.Beast. Three routing mechanisms:
+HttpServer uses **exact string path matching** via standalone Asio. Three routing mechanisms:
 
 | Feature | Msg | RPC (Request/Response) | HTTP |
 |---|---|---|---|
