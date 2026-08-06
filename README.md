@@ -13,12 +13,7 @@ c++ 网络游戏服务器框架
 
 ## linux
     注意*: linux下默认python环境可能不让安装conan,需要建一个虚拟环境，之后每次操作都是在这个虚拟环境下进行
-    1. 设置profile,添加下面两行 conan有个bug Conan + Boost 1.90 的 recipe 在初始化阶段就不兼容 cobalt 模块，
-        取消boost charconv模块的float128支持 （这里只是说明下预设profile文件已经设置好了，这一步可以跳过）
-        [options]
-        boost/*:without_cobalt=True
-        [conf]
-        tools.build:cxxflags+=["-DBOOST_CHARCONV_DISABLE_FLOAT128"]
+    1. 设置profile（主要设置msvc工具链的路径，需要根据情况修改）
     2. conan install . -pr=profiles/clang_debug_pr --build=missing
     3. cmake --preset conan-debug
     4. cmake --build --preset conan-debug --parallel
@@ -839,7 +834,7 @@ Worker::OnStart()
 
 # 模块八：HTTP 模块
 
-基于 **Boost.Beast** 的 HTTP/HTTPS 服务器与客户端，独立于 TCP 消息系统。
+基于 **standalone Asio** 的 HTTP/HTTPS 服务器与客户端，独立于 TCP 消息系统。
 
 ## HttpServer（src/network/http/http_server.h）
 
@@ -856,7 +851,7 @@ bool HttpServer::StartSSL(const std::string& ip, uint16_t port,
 // 路由注册：精确字符串路径匹配
 void HttpServer::Get(const std::string& path, HttpRequestHandler handler);
 void HttpServer::Post(const std::string& path, HttpRequestHandler handler);
-void HttpServer::AddRoute(const std::string& path, boost::beast::http::verb method, HttpRequestHandler handler);
+void HttpServer::AddRoute(const std::string& path, http::verb method, HttpRequestHandler handler);
 
 // 优雅停止（等待活跃会话结束）
 void HttpServer::Stop();
@@ -887,18 +882,40 @@ int LoginApp::OnServerInit()
 }
 ```
 
-## HttpClient（src/network/http/http_client.h）
+## HttpClient（src/network/http/client_http.hpp）
 
-Boost.Asio 协程 + 回调两种 API：
+基于 standalone Asio 的 HTTP/HTTPS 客户端，支持回调、同步和协程三种 API。
+
+### 回调风格
 
 ```cpp
-// 协程风格（Boost.Asio awaitable）
-auto res = co_await client.Get("https://example.com/api");
-
-// 回调风格
-client->Get("http://example.com/api", [](gb::HttpResponse res) { ... });
-client->Post("http://example.com/api", body, cb, "application/json");
+client.request("GET", "/api", "", {},
+    [](std::shared_ptr<Response> resp, const std::error_code &ec) {
+        // 处理响应
+    });
 ```
+
+### 同步风格
+
+```cpp
+auto resp = client.request("GET", "/api");
+```
+
+### 协程风格（async_simple）
+
+```cpp
+auto resp = co_await client.CoRequest("GET", "/api/path");
+if (resp && resp->status_code == "200") {
+    // 使用 resp->content
+}
+
+// POST 请求
+auto resp = co_await client.CoRequest("POST", "/submit",
+    R"({"key":"value"})",
+    {{"Content-Type", "application/json"}});
+```
+
+`CoRequest` 方法同时存在于 `HttpClient` 和 `HttpsClient`，使用方式完全一致。
 
 ## HTTP 消息类型（http_common.h）
 
@@ -980,7 +997,7 @@ Lua 侧 `log.Info/Error/Warning` 自动携带 `文件:行号`（通过 `debug.ge
 
 # 模块十一：Redis Lua 接口（src/db/redis/）
 
-**连接池 + Boost.Redis**，Lua 侧支持**回调**与 **Await 协程**两种用法。
+**连接池 + hiredis**，Lua 侧支持**回调**与 **Await 协程**两种用法。
 
 ```lua
 -- 连接（连接池，host, port, pool_size, password 可选）
@@ -1090,7 +1107,7 @@ local err, resp = nats.Await("RequestProto", subject, meta_bytes, request_proto,
 
 # 模块十四：ETCD 服务发现（src/network/etcd/）
 
-基于 **etcd v3 HTTP JSON API**（使用框架自研 HttpClient，底层 Boost.Asio）的 KV + 租约 + Watch，用于服务注册与发现。
+基于 **etcd v3 HTTP JSON API**（使用框架自研 HttpClient，底层 Asio）的 KV + 租约 + Watch，用于服务注册与发现。
 
 ## Lua 接口
 
@@ -1156,7 +1173,7 @@ src/
     lz4.h/.cpp               — LZ4 压缩流
     tran_buf_pool.h          — 传输缓冲池（接收侧内存复用）
   db/
-    redis/                   — Redis 连接池 + Lua 绑定（Boost.Redis）
+    redis/                   — Redis 连接池 + Lua 绑定（hiredis）
     postgres/                — PostgreSQL + Lua 绑定（libpq）
   define/
     define.h                 — NET_TYPE（含 NT_NATS）、NET_ErrorCode、通用宏（NEW）
@@ -1170,7 +1187,10 @@ src/
     byte_stream.h            — ByteStream（TCP 流抽象）
     ssl_byte_stream.h/.cpp   — SSLByteStream（SSL/TLS 流）
   network/
-    http/                    — HTTP 服务器/客户端（Boost.Beast）
+    http/                    — HTTP 服务器/客户端（standalone Asio）
+      http_coro.h            — 协程支持（HttpAwaitState, HttpCallAwaiter）
+      client_http.hpp        — HttpClient（回调 + 同步 + 协程 API）
+      client_https.hpp       — HttpsClient（同协程 API）
     io/                      — 网络 IO 层
       server.h/.cpp              — Server/ServerImpl（TCP 服务器）
       client.h/.cpp              — Client/ClientImpl（TCP 客户端）

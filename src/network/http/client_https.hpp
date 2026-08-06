@@ -38,6 +38,22 @@ namespace gb::http {
         context.set_verify_mode(asio::ssl::verify_none);
     }
 
+    /// 协程风格的异步 HTTPS 请求。
+    /// 用法：auto resp = co_await client.CoRequest("GET", "/api/path");
+    async_simple::coro::Lazy<std::shared_ptr<Response>>
+    CoRequest(const std::string &method, const std::string &path = std::string("/"),
+              string_view content = "",
+              const CaseInsensitiveMultimap &header = CaseInsensitiveMultimap())
+    {
+      co_return co_await http::detail::HttpCallAwaiter<Response>{
+        [this, method, path, content, header](const std::shared_ptr<http::detail::HttpAwaitState<Response>> &state) {
+          this->request(method, path, content, header,
+            [state](std::shared_ptr<Response> response, const std::error_code &ec) {
+              state->Complete(std::move(response), ec);
+            });
+        }};
+    }
+
   protected:
     asio::ssl::context context;
 
